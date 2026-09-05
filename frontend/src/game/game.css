@@ -2068,3 +2068,90 @@
   border-radius: 1px;
 }
 .game-root .touch-pause:active { background: rgba(40, 22, 14, 0.7); }
+
+/* ---------------------------------------------------------------- ROTATE --
+   Portrait on a phone is not a supported way to play.
+
+   The game renders perfectly well in portrait, which is exactly the problem: a
+   first-person maze in a tall thin window has no peripheral vision, the corridor
+   ahead is a slot, and the stick and sprint button crowd a screen with no width
+   to spare. It works, and it plays badly.
+
+   Above EVERYTHING — the scoreboard modal sits at z 40, the touch controls at
+   25 — because this must not be something you can play around. */
+.game-root .rotate {
+  position: absolute;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: #060303;
+  pointer-events: auto;
+  /* Swallow the swipe that would otherwise reach the look surface underneath. */
+  touch-action: none;
+}
+.game-root .rotate-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  text-align: center;
+  max-width: 22rem;
+}
+.game-root .rotate-title {
+  margin: 0;
+  font-family: 'Georgia', 'Times New Roman', serif;
+  font-size: clamp(0.95rem, 4.6vw, 1.25rem);
+  font-weight: 400;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  color: #c8a271;
+}
+.game-root .rotate-note {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: #6b6058;
+  font-style: italic;
+}
+/* A phone turning. Drawn rather than an icon font or an emoji — both of which
+   render differently on every device, and one of which would be a yellow
+   cartoon in the middle of a horror game. */
+.game-root .rotate-phone {
+  position: relative;
+  width: 4.4rem;
+  height: 4.4rem;
+  display: grid;
+  place-items: center;
+}
+.game-root .rotate-phone-body {
+  width: 2.1rem;
+  height: 3.4rem;
+  border: 2px solid rgba(196, 136, 84, 0.55);
+  border-radius: 0.32rem;
+  animation: gr-rotate-hint 2.6s ease-in-out infinite;
+}
+/* The arc that says "turn it", sweeping the same way the phone does. */
+.game-root .rotate-arrow {
+  position: absolute;
+  inset: 0;
+  border: 2px solid transparent;
+  border-top-color: rgba(196, 136, 84, 0.3);
+  border-right-color: rgba(196, 136, 84, 0.3);
+  border-radius: 50%;
+  animation: gr-rotate-sweep 2.6s ease-in-out infinite;
+}
+@keyframes gr-rotate-hint {
+  0%, 30%   { transform: rotate(0deg); }
+  60%, 100% { transform: rotate(-90deg); }
+}
+@keyframes gr-rotate-sweep {
+  0%, 30%   { transform: rotate(0deg); opacity: 0.25; }
+  60%, 100% { transform: rotate(-90deg); opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .game-root .rotate-phone-body,
+  .game-root .rotate-arrow { animation: none; transform: rotate(-90deg); }
+}

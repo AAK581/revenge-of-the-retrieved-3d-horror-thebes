@@ -137,6 +137,32 @@ export default function GameCanvas() {
    * drift out of step and the button would offer to "Exit" a fullscreen the
    * player had already left.
    */
+  /**
+   * PORTRAIT ON A PHONE IS NOT A SUPPORTED WAY TO PLAY.
+   *
+   * The game renders fine in portrait, which is the problem: a first-person
+   * horror maze in a tall thin window has almost no peripheral vision, the
+   * corridor ahead is a slot, and the analog stick and sprint button crowd the
+   * bottom of a screen that has no width to spare. It "works" and it plays badly.
+   *
+   * `matchMedia` rather than comparing innerWidth/innerHeight: on mobile the
+   * viewport also goes short-and-wide when the URL bar collapses or the keyboard
+   * opens, and a dimension comparison reads those as a rotation.
+   *
+   * Touch only. A narrow desktop window is someone resizing a browser, not
+   * someone holding a phone the wrong way, and demanding they rotate a monitor
+   * would be absurd.
+   */
+  const [isPortrait, setIsPortrait] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(orientation: portrait)');
+    const sync = () => setIsPortrait(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
     const sync = () => setIsFullscreen(!!document.fullscreenElement);
@@ -194,6 +220,24 @@ export default function GameCanvas() {
    */
   const hasTouch = typeof window !== 'undefined' &&
     ('ontouchstart' in window || navigator.maxTouchPoints > 0);
+
+  /** Phone held upright: block play until it is turned. */
+  const needsRotate = hasTouch && isPortrait;
+
+  /**
+   * PAUSE if they rotate mid-run.
+   *
+   * The rotate overlay covers the screen, and without this the monster would go
+   * on hunting behind it — you would be caught by something you could not see,
+   * which is the one death a horror game has no right to hand out.
+   *
+   * It stays paused after they rotate back, deliberately: the pause menu is then
+   * on screen and resuming is a decision. Dropping someone straight back into a
+   * chase they could not watch develop is the same unfairness one step later.
+   */
+  useEffect(() => {
+    if (needsRotate && phase === 'playing') setPaused(true);
+  }, [needsRotate, phase]);
   const [progress, setProgress] = useState({ fraction: 0, label: 'Waking' });
   const [doorHint, setDoorHint] = useState(false);
   const [pointerLocked, setPointerLocked] = useState(false);
@@ -874,6 +918,19 @@ export default function GameCanvas() {
         memphisName={memphisName}
         refreshKey={boardKey}
       />
+
+      {needsRotate && (
+        <div className="rotate" role="alertdialog" aria-label="Rotate your device">
+          <div className="rotate-inner">
+            <div className="rotate-phone" aria-hidden="true">
+              <span className="rotate-phone-body" />
+              <span className="rotate-arrow" />
+            </div>
+            <h2 className="rotate-title">TURN YOUR SCREEN</h2>
+            <p className="rotate-note">He is easier to miss in a narrow room.</p>
+          </div>
+        </div>
+      )}
 
       {/* PAUSE, top right. Esc is the only other way in and a phone has no Esc,
           so without this a mobile player cannot pause, quit, or reach settings
