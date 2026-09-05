@@ -12,6 +12,43 @@
     <meta name="color-scheme" content="dark" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23050202'/%3E%3Ccircle cx='34' cy='44' r='11' fill='%23c8330f'/%3E%3Ccircle cx='68' cy='44' r='11' fill='%23c8330f'/%3E%3C/svg%3E" />
     <title>Revenge of the Retrieved</title>
+
+    <!--
+      LINK PREVIEW (WhatsApp, iMessage, Discord, Twitter/X, Slack).
+
+      `og:image` MUST be an absolute URL. Link scrapers fetch it out of band,
+      with no page context, so a relative path — which is what everything else in
+      this app deliberately uses, because it is served under /_/raw/<cid>/ — is
+      simply not resolved and the preview comes back blank.
+
+      That means this URL hard-codes the gateway and the frontend canister id
+      from thebes.toml. If either changes, this changes with it; there is no way
+      to derive it at build time from inside a static bundle.
+
+      og.jpg is 1200x630 (the 1.91:1 large-card ratio) cropped around the IRIS
+      rather than the geometric centre, because the iris sits above centre in
+      sonEye.png and a naive crop clips it. JPEG at 52KB: scrapers fetch this on
+      phone connections and WhatsApp is unreliable much above a few hundred KB.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Revenge of the Retrieved" />
+    <meta property="og:title" content="Revenge of the Retrieved" />
+    <meta property="og:description" content="You murdered a man's son. The father did not go to the law. A first-person horror maze — collect what the spell took, and do not let him reach you." />
+    <meta property="og:url" content="https://memphis.mercaturaforum.com/_/raw/115382987180688/index.html" />
+    <meta property="og:image" content="https://memphis.mercaturaforum.com/_/raw/115382987180688/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:alt" content="A bloodshot eye, staring." />
+
+    <!-- Twitter/X ignores og:image sizing and needs its own card type to show a
+         large image rather than a thumbnail. -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Revenge of the Retrieved" />
+    <meta name="twitter:description" content="A first-person horror maze. There is no escape... Not even death..." />
+    <meta name="twitter:image" content="https://memphis.mercaturaforum.com/_/raw/115382987180688/og.jpg" />
+
+    <meta name="theme-color" content="#0b0605" />
     <style>
       /* The shell that is on screen between first paint and React mounting.
          Without this the browser shows its default white page for a beat, which
