@@ -131,6 +131,61 @@ export default function GameCanvas() {
   /** The scoreboard modal. Starts CLOSED, by requirement. */
   const [boardOpen, setBoardOpen] = useState(false);
   /**
+   * Fullscreen. Mirrored from the document rather than tracked as our own
+   * intent, because the browser can leave fullscreen without asking us — Escape,
+   * the F11 key, a tab switch, an OS gesture. A boolean we set ourselves would
+   * drift out of step and the button would offer to "Exit" a fullscreen the
+   * player had already left.
+   */
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const sync = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', sync);
+    // Safari, which still ships the prefixed event.
+    document.addEventListener('webkitfullscreenchange', sync);
+    sync();
+    return () => {
+      document.removeEventListener('fullscreenchange', sync);
+      document.removeEventListener('webkitfullscreenchange', sync);
+    };
+  }, []);
+
+  /**
+   * Fullscreen the whole PAGE, not the canvas.
+   *
+   * The menus, the HUD and the touch controls are DOM siblings of the canvas, so
+   * fullscreening the canvas alone would take the game fullscreen and leave every
+   * control behind on a page nobody can see. `documentElement` keeps the overlay
+   * stack intact.
+   *
+   * Must be called from a user gesture or the browser rejects it — hence a button
+   * rather than, say, doing it automatically on Descend.
+   */
+  const toggleFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        const el = document.documentElement as HTMLElement & {
+          webkitRequestFullscreen?: () => Promise<void>;
+        };
+        if (el.requestFullscreen) await el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
+      }
+    } catch {
+      /* iOS Safari refuses fullscreen on iPhone entirely; the button simply
+         does nothing there rather than throwing into the console. */
+    }
+  }, []);
+
+  /**
+   * Is fullscreen even available? iPhone Safari exposes no Fullscreen API at
+   * all, so offering the button there is offering something that cannot work.
+   */
+  const canFullscreen = typeof document !== 'undefined' &&
+    (document.fullscreenEnabled ||
+     !!(document as Document & { webkitFullscreenEnabled?: boolean }).webkitFullscreenEnabled);
+  /**
    * Does this device do touch at all? NOT "is this a phone" — the controls mount
    * wherever touch exists and are simply ignored by a player using a mouse,
    * which is the right behaviour on a touchscreen laptop and on a tablet with a
@@ -795,6 +850,15 @@ export default function GameCanvas() {
                 <button className="btn btn--ghost menu-board-btn" onClick={() => setBoardOpen(true)}>
                   Scoreboard
                 </button>
+                {/* Deliberately NOT in the HUD: the user asked for it in the two
+                    menus only. A fullscreen control on the play HUD is one more
+                    thing to fat-finger mid-chase, and on touch it would sit in
+                    the same corner as the pause button. */}
+                {canFullscreen && (
+                  <button className="btn btn--ghost menu-board-btn" onClick={() => void toggleFullscreen()}>
+                    {isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -921,6 +985,11 @@ export default function GameCanvas() {
             <div className="pause-buttons">
               <button className="btn btn--primary" onClick={resume}>Resume</button>
               <button className="btn" onClick={retry}>Restart</button>
+              {canFullscreen && (
+                <button className="btn btn--ghost" onClick={() => void toggleFullscreen()}>
+                  {isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                </button>
+              )}
               <button className="btn btn--ghost" onClick={goHome}>Home</button>
             </div>
           </div>
