@@ -1,0 +1,78 @@
+# build outputs
+build/
+backend/target/
+frontend/dist/
+frontend/asset_canister.wasm
+
+# dependencies
+node_modules/
+
+# local identity material never belongs in a repo
+*.seed
+*.secret.json
+*.key
+*.pem
+.env
+.env.*
+
+# Local chain state. `.thebes/deployed/*.most` is the EXCEPTION and is kept: it is
+# the stable-type signature of what is currently installed on each canister, and
+# without it `thebes-deploy deploy --upgrade` cannot prove your data survives an
+# upgrade — it refuses to run. It belongs with the source that produced it.
+.thebes/*
+!.thebes/deployed/
+!.thebes/deployed/*.most
+
+# Scratch from the tuning waves — hundreds of megabytes of intermediate captures
+# and probe output. Regenerable from tools/, and meaningless to anyone else.
+.tone/
+.tmpaud/
+.tmpcrit/
+.tmpmaze/
+.mops/
+
+# Recorded playthroughs. Kept locally because they are how bugs get reported, but
+# they are tens of megabytes of video each and belong in an issue, not in history.
+screenshots_from_dev/
+
+# RAW SOURCE MODELS — 159MB, two of them ~80MB each.
+#
+# GitHub warns above 50MB and hard-rejects above 100MB, and anything committed
+# here bloats every future clone forever. What the GAME needs is the Draco-
+# compressed billy.glb (2.11MB) under frontend/public/assets/, which IS committed.
+# These are the uncompressed originals the retarget pipeline consumed.
+#
+# If you want that pipeline reproducible from a clean clone, the right home for
+# them is Git LFS or a release asset — not the tree.
+_assets_raw/
+
+# OS / editor noise
+.DS_Store
+*.swp
+
+# ─── INTERNAL: development artefacts, not needed to play or to build ────────
+#
+# Excluded at the user's request: "anything that users or players won't need".
+# All of it stays on disk — .gitignore hides files from git, it does not delete
+# them — it simply is not published.
+
+# The engineering log: 55 numbered traps, wave-by-wave findings, session
+# recovery notes. Invaluable to whoever works on this next; noise to everyone
+# else. NOTE: this is also the only written record of WHY several non-obvious
+# constants are what they are, so keep your local copy safe.
+PROGRESS.md
+
+# The live progress page (status.json + index.html served on :8910).
+progress/
+
+# Internal specs, lane handoffs, and 12MB of before/after evidence captures.
+docs/
+
+# The test and measurement harness: ~120 Playwright scripts, beat scripts and
+# image-metric tools. Development-only — the game neither imports nor ships any
+# of it. Excluding it also means a clean clone cannot run the verification
+# suite, which is the trade being made here.
+tools/
+
+# Agent working notes.
+.claude/

@@ -1,0 +1,10 @@
+{
+  "name": "revenge-of-the-retrieved-3d-thebes-tools",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Dev-side tooling: headless capture harness, asset pipeline, progress page. Not shipped to the asset canister.",
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

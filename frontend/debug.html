@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Billy — monster test map</title>
+    <style>
+      /* Deliberately plain. This is an instrument, not a screen in the game:
+         nothing here should be atmospheric, because atmosphere is exactly what
+         makes a debug reading hard to trust. No dat.gui, no leva — plain DOM. */
+      html, body {
+        margin: 0; padding: 0; height: 100%; overflow: hidden;
+        background: #14161a; color: #d6dae0;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      #app { position: fixed; inset: 0; }
+      canvas { display: block; }
+
+      .panel {
+        position: fixed; background: rgba(16, 19, 24, 0.93);
+        border: 1px solid #2c333d; border-radius: 4px; padding: 10px 12px;
+        backdrop-filter: blur(2px);
+      }
+      #controls { top: 10px; left: 10px; width: 260px; max-height: calc(100vh - 20px); overflow-y: auto; }
+      #readout  { top: 10px; right: 10px; width: 290px; }
+
+      h2 {
+        margin: 0 0 6px; font-size: 11px; font-weight: 600;
+        letter-spacing: 0.09em; text-transform: uppercase; color: #7f8b9a;
+      }
+      .grp { margin-bottom: 12px; }
+      .grp:last-child { margin-bottom: 0; }
+
+      button {
+        font: inherit; color: #d6dae0; background: #232a33;
+        border: 1px solid #39424e; border-radius: 3px;
+        padding: 4px 9px; margin: 0 4px 4px 0; cursor: pointer;
+      }
+      button:hover { background: #2d3641; }
+      button.on { background: #2f5d3f; border-color: #48916230; color: #dcffe8; }
+      button.warn { background: #5d2f2f; border-color: #91484830; color: #ffdcdc; }
+
+      input[type=range] { width: 100%; margin: 4px 0 2px; }
+      label.row { display: flex; justify-content: space-between; gap: 8px; color: #9aa5b3; }
+
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 1px 0; vertical-align: top; }
+      td.k { color: #7f8b9a; white-space: nowrap; padding-right: 8px; }
+      td.v { color: #e8edf3; text-align: right; font-variant-numeric: tabular-nums; }
+      .good { color: #6ee7a0; }
+      .bad  { color: #ff8b8b; }
+      .hint { color: #6b7683; font-size: 11px; margin-top: 6px; }
+      .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: baseline; }
+      #err {
+        position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%);
+        max-width: 560px; padding: 16px 20px; background: #3a1d1d;
+        border: 1px solid #7c3b3b; border-radius: 4px; color: #ffd9d9;
+        white-space: pre-wrap; display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="err"></div>
+    <script type="module" src="./src/debug/main.ts"></script>
+  </body>
+</html>

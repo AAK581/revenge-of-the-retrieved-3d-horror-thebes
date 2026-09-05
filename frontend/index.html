@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- `maximum-scale=1, user-scalable=no`: a double-tap zoom or a pinch in the
+         middle of a swipe-to-look would leave the game rendered at 2x under a
+         scrolled viewport with no way back. `viewport-fit=cover` lets the
+         controls sit in the safe-area insets on a notched phone. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#050202" />
+    <meta name="description" content="A first-person horror maze. Collect what he took. Do not let him reach you." />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%23050202'/%3E%3Ccircle cx='34' cy='44' r='11' fill='%23c8330f'/%3E%3Ccircle cx='68' cy='44' r='11' fill='%23c8330f'/%3E%3C/svg%3E" />
+    <title>Revenge of the Retrieved</title>
+    <style>
+      /* The shell that is on screen between first paint and React mounting.
+         Without this the browser shows its default white page for a beat, which
+         is the single loudest thing in the whole build. It is black, and it is
+         already the right black. */
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #050202;
+        color: #6d635a;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+      #root { height: 100%; }
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(ellipse at 50% 55%, #240705 0%, #080302 70%);
+        font-family: Georgia, 'Times New Roman', serif;
+        letter-spacing: 0.42em;
+        text-indent: 0.42em;
+        font-size: 0.9rem;
+        color: #4b423b;
+        z-index: 1;
+      }
+      /* React renders into #root, which paints over this. Once anything is in
+         #root the boot shell is redundant, so it fades itself out on load. */
+      body.booted #boot { opacity: 0; transition: opacity 0.6s ease; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <!--
+      The panel material filters, used by `.plank` in game.css.
+
+      These live in the document rather than in a data-URI because CSS
+      `filter: url(#id)` only resolves against a filter that is actually in the
+      DOM. They are the reason our menu panels have a torn, burnt silhouette
+      instead of four straight CSS edges: feTurbulence generates a noise field
+      and feDisplacementMap pushes each pixel of the panel's ground layer along
+      it, so the outline genuinely wanders. No stack of gradients can do that.
+
+      Confirmed rendering correctly under the harness's SwiftShader rasterizer —
+      Chromium runs SVG filters on the CPU through Skia, so they cost nothing in
+      GPU budget and are not affected by the software-rendering floor.
+    -->
+    <svg width="0" height="0" aria-hidden="true" focusable="false"
+         style="position:absolute;width:0;height:0;overflow:hidden">
+      <defs>
+        <!-- The panel ground. Anisotropic base frequency (wider than tall) so
+             the tearing runs with the plank grain rather than against it. -->
+        <filter id="gr-torn" x="-8%" y="-14%" width="116%" height="128%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.021 0.05"
+                        numOctaves="4" seed="11" result="n" />
+          <feDisplacementMap in="SourceGraphic" in2="n" scale="11"
+                             xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+        <!-- Same field, same seed, slightly smaller amplitude, for the carved
+             frame. Sharing the seed keeps the frame following the same tear as
+             the ground instead of crossing it. -->
+        <filter id="gr-tornsoft" x="-8%" y="-14%" width="116%" height="128%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.021 0.05"
+                        numOctaves="4" seed="11" result="n" />
+          <feDisplacementMap in="SourceGraphic" in2="n" scale="9"
+                             xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+        <!-- `gr-pit` used to live here: high-frequency displacement applied to
+             the four grey "metal corner fittings". Those spans are gone — the
+             corners are painted into assets/ui/frame-cord.png now, where the
+             cords knot and spiral — so the filter had no subjects left and is
+             deleted rather than left as a dead def. -->
+      </defs>
+    </svg>
+    <div id="boot">REVENGE OF THE RETRIEVED</div>
+    <div id="root"></div>
+    <script>window.MEMPHIS_SESSION_SCOPE = "44072137928639";</script>
+    <script src="./passkey.js"></script>
+    <script type="module" src="./src/main.tsx"></script>
+    <script>
+      // Not a timer — waits for the game host to actually exist in the DOM.
+      new MutationObserver(function (_m, obs) {
+        if (document.querySelector('.game-root')) {
+          document.body.classList.add('booted');
+          obs.disconnect();
+        }
+      }).observe(document.getElementById('root'), { childList: true, subtree: true });
+    </script>
+  </body>
+</html>

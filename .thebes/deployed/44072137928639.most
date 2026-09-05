@@ -1,0 +1,25 @@
+// Version: 1.0.0
+type Best__844339173 = {depth : Nat; gems : Nat};
+type Data__917616847<K, V> =
+  {var count : Nat__1011761150; kvs : [var ?(K, V)]};
+type Internal__150062700<K, V> =
+  {children : [var ?Node__362690243<K, V>]; data : Data__917616847<K, V>};
+type Leaf__147444601<K, V> = {data : Data__917616847<K, V>};
+type Nat__1011761150 = Nat__920180692;
+type Nat__920180692 = Nat;
+type Node__362690243<K, V> =
+  {#internal : Internal__150062700<K, V>; #leaf : Leaf__147444601<K, V>};
+actor {
+  stable var captures : Nat;
+  stable var deepestEver : Nat;
+  stable profiles :
+    {var root : Node__362690243<Text, Text>; var size : Nat__1011761150};
+  stable var runs : Nat;
+  stable scores :
+    {
+      var root : Node__362690243<Text, Best__844339173>;
+      var size : Nat__1011761150
+    };
+  stable usernameIndex :
+    {var root : Node__362690243<Text, Text>; var size : Nat__1011761150}
+};

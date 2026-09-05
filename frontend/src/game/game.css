@@ -1,0 +1,2070 @@
+/* All game chrome.
+ *
+ * Two hard rules learned from pixels, not from reading:
+ *
+ * 1. EVERY selector in this file is scoped under `.game-root`. The Thebes
+ *    scaffold's `src/App.css` is imported from main.tsx and lands AFTER this
+ *    sheet in Vite's injection order, and it defines a bare `button` rule plus
+ *    its own `.panel`. At equal specificity the scaffold won, which is why the
+ *    game-over window used to render as a white card with a blue button. The
+ *    `.game-root` ancestor lifts every rule here to (0,2,0) and settles it.
+ *    Do not "tidy" the prefixes away.
+ * 2. Nothing here is named `.panel`. See above.
+ *
+ * The look: Amnesia's menus are part of the horror. They are quiet, textured and
+ * unhurried — no bright fills, no rounded corners, no motion that reads as "web
+ * page". Everything is lit by the same dying red as the maze.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY EVERY PANEL IS A BITMAP AND NOT AN rgba() FILL
+ * ---------------------------------------------------------------------------
+ * A critic measured the old chrome against real Amnesia and the whole remaining
+ * gap was surface material, quantified:
+ *
+ *     ours   mean luminance  5.2/255   std  6.0   high-frequency detail 0.93
+ *     theirs mean luminance 20.5/255   std 23.1   high-frequency detail 4.19
+ *
+ * Amnesia never draws a flat fill. Its menu panel is a painted parchment bitmap
+ * with torn edges, framed in carved wood with metal corner fittings. Ours was a
+ * 1px-bordered rgba() rectangle on near-black — 4.5x less surface detail.
+ *
+ * So `.plank` is the one panel material in this file and everything (menu, pause,
+ * end windows, loading plate) is built on it. It is:
+ *
+ *   1. `woodWall.png` — the actual wall texture of the maze — as the ground, so
+ *      the menu is literally made of the same material as the world. Sampled at
+ *      a scale where the plank grain, knots and grime read as panel grain.
+ *   2. A torn, burnt silhouette from `filter: url(#gr-torn)` — an SVG
+ *      feTurbulence -> feDisplacementMap pair defined in index.html. This warps
+ *      the panel's actual outline into something ragged. No stack of gradients
+ *      can fake an irregular edge; displacement is the only honest way.
+ *   3. A non-uniform 3-5px carved border, top lighter than bottom, plus inset
+ *      shadows: the panel reads as an object with thickness, lit from above.
+ *   4. Metal corner fittings and rivets, pitted by a second displacement filter.
+ *
+ * The filter is applied ONLY to the ::before ground layer, never to the panel
+ * itself. Filtering the panel warps the text into illegibility — verified with
+ * pixels, see the first probe capture.
+ *
+ * Measured result of the same crop after this change: mean 24.6, std 24.2.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE MENU AND PAUSE BACKGROUNDS ARE TRANSLUCENT
+ * ---------------------------------------------------------------------------
+ * The game renders continuously in every phase, and `setPaused` keeps it
+ * drawing, so the maze is genuinely behind both screens. These used to paint an
+ * opaque fill over it. They no longer do: they are translucent and use
+ * `backdrop-filter` so the world blurs through and the menus sit IN the world.
+ *
+ * Caveat measured honestly: at `phase === 'menu'` the canvas is currently pure
+ * black (mean RGB 0,0,0 with every overlay removed from the DOM), because the
+ * menu camera is frozen at spawn and nothing is lit. A lit, drifting menu camera
+ * lives in game.ts, which this lane does not own — requested in
+ * docs/handoff/ui-menus.md. The moment that lands, these backgrounds start
+ * showing the maze with no further change here. The pause screen already
+ * benefits today, because there the camera is wherever the player was standing.
+ */
+
+.game-root {
+  --ember: #c8330f;
+  --ember-dim: #7a1f09;
+  --bone: #d9cfc2;
+  --ash: #6d635a;
+  --ink: #050202;
+
+  position: fixed;
+  inset: 0;
+  background: #000;
+  overflow: hidden;
+  font-family: 'Georgia', 'Times New Roman', serif;
+  color: var(--bone);
+  cursor: default;
+  /* The scaffold sheet sets transitions on bare `button`; kill inheritance of
+     anything that would make this chrome feel like a form. */
+  -webkit-font-smoothing: antialiased;
+}
+
+.game-root .game-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------------------------------------------------------------- texture --
+   One shared grain + vignette layer that every overlay pulls in via ::after.
+   A flat radial gradient reads as "CSS"; grain on top of it reads as film.
+   The grain is a data-URI SVG turbulence so it costs no request and no decode
+   of a real image. */
+.game-root .grain::after,
+.game-root .overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='180' height='180' filter='url(%23n)' opacity='0.42'/></svg>");
+  opacity: 0.16;
+  mix-blend-mode: overlay;
+  animation: gr-grain 0.9s steps(3) infinite;
+  z-index: 3;
+}
+
+@keyframes gr-grain {
+  0%   { transform: translate(0, 0); }
+  33%  { transform: translate(-3%, 2%); }
+  66%  { transform: translate(2%, -3%); }
+  100% { transform: translate(0, 0); }
+}
+
+.game-root .overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.1rem;
+  text-align: center;
+  z-index: 10;
+}
+
+/* A vignette that breathes, like a lamp that is not sure it wants to stay lit.
+   Slow and shallow — if you can consciously see it pulsing it is too strong. */
+.game-root .overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 48%, transparent 32%, rgba(0, 0, 0, 0.82) 92%);
+  animation: gr-breathe 7s ease-in-out infinite;
+  z-index: 2;
+}
+
+@keyframes gr-breathe {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 1; }
+}
+
+/* ------------------------------------------------------------- the plank --
+   The one panel material. See the long note at the top of this file for why
+   this is a bitmap and not an rgba() fill. Every window in the game is a
+   `.plank`; nothing else in here is allowed to be a flat rectangle. */
+.game-root .plank {
+  position: relative;
+  z-index: 4;
+  /* No background, no border, no box-shadow on the element itself — the element
+     is a positioning context and nothing more. All material is in the layers. */
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+/* Content sits above both material layers. */
+.game-root .plank > * { position: relative; z-index: 3; }
+
+/* Layer 1 — the ground. The maze's own wall texture, torn into shape. */
+.game-root .plank::before {
+  content: '';
+  position: absolute;
+  /* Negative, so the wood runs OUT UNDER the cord frame rather than stopping at
+     the padding box. An absolutely positioned child is laid out against the
+     PADDING box, and `.plank` now carries a ~50px border-image, so `inset: 0`
+     ends the wood exactly where the cords start. Captured at native crop that
+     showed as a dead-straight vertical wood edge with a band of black between
+     it and the cords — the box, right back where it was, just narrower.
+     -46px puts the wood under the middle of the cord run. */
+  inset: -46px;
+  z-index: 0;
+  background-image:
+    /* A soft top-down light so the slab reads as lit from above rather than as
+       a flat swatch: the top edge catches, the bottom falls into the dark. */
+    linear-gradient(180deg, rgba(255, 212, 158, 0.11) 0%, transparent 30%,
+                            rgba(0, 0, 0, 0.16) 82%, rgba(0, 0, 0, 0.36) 100%),
+    /* An ember wash from the lower left, the same dying red as the maze. */
+    radial-gradient(120% 90% at 18% 108%, rgba(150, 42, 14, 0.26) 0%, transparent 62%),
+    url('/assets/textures/woodWall.png'),
+    /* A FLOOR UNDER THE GRAIN, screened on so it lifts blacks without touching
+       highlights.
+       woodWall.png is a maze wall and it contains genuinely black regions: the
+       deep shadow between planks, and one large dark knot. A panel samples a
+       560px tile at one arbitrary offset, so which region it lands on is luck.
+       Measured on captured frames: the pause panel (420px wide) landed on lit
+       grain and read a healthy mean R 22/255, while the win window (530x334)
+       landed on the knot and read literally 0,0,0 down a vertical scan through
+       its lower two thirds. That is the flat black rectangle a critic sees
+       inside the nice frame — and it is a texture-sampling accident, not a
+       grade, so no amount of brightness() fixes it: 0 x anything is 0.
+       `screen` is the correct operator because it is additive in the shadows
+       and asymptotic in the highlights, so the grain that IS there survives
+       untouched and only the dead pixels come up off the floor. */
+    linear-gradient(180deg, #2a1610 0%, #23110c 60%, #170b08 100%);
+  background-size: auto, auto, 560px, auto;
+  background-position: center, center, center, center;
+  background-blend-mode: normal, normal, screen, normal;
+  /* The grade is the whole argument. Too dark and we are back to the flat black
+     rectangle the critic measured at mean 5/255; too bright and the panel
+     becomes the most luminous thing on a near-black screen, which is exactly
+     backwards for a horror menu — it should be a dim object you lean toward,
+     not a lamp. 0.72 with saturation pulled to 0.5 lands the panel around mean
+     20-25/255 with real grain visible, which is Amnesia's measured range, and
+     keeps it inside the game's three-colour palette instead of glowing orange. */
+  /* Saturation is the measured deficit on this chrome, not luminance. A critic
+     put our menu at 0.404 mean saturation against Amnesia's inventory screen at
+     0.079 and named it: in Amnesia a LIT 3D SCENE carries the colour, so the
+     hue is low and the value does the work, while a flat warm bitmap has to put
+     everything in hue and reads as orange. woodWall.png is a strongly orange
+     texture, so at 0.54 the panel was the most chromatic object in the build.
+     0.34 keeps enough warmth that it is still wood and not concrete, and drops
+     the panel back inside the spec's grey / hair-brown / wet-red palette so the
+     cord frame is the only saturated thing on screen — which is correct, since
+     the cords are the one element that is supposed to be wet. */
+  filter: url(#gr-torn) brightness(0.90) saturate(0.34) contrast(1.08);
+  /* Belt and braces on the silhouette. `gr-torn` wanders the wood's outline by
+     ~11px, which is enough to break a straight line but not enough to hide one
+     if the cords do not happen to land on it. This mask fades the ground out
+     over the outer 46px — exactly the band the cords occupy — so the wood has
+     no terminating edge of its own AT ALL and everything visible against black
+     is cord. Verified by crop: before this, the panel's left side was a hard
+     vertical wood boundary sitting inboard of the frame. */
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 46px, #000 calc(100% - 46px), transparent 100%),
+                      linear-gradient(to bottom, transparent 0, #000 46px, #000 calc(100% - 46px), transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent 0, #000 46px, #000 calc(100% - 46px), transparent 100%),
+              linear-gradient(to bottom, transparent 0, #000 46px, #000 calc(100% - 46px), transparent 100%);
+  mask-composite: intersect;
+}
+
+/* Layer 2 — the shadow the cord frame casts onto the ground it lies on, and the
+   darkening under the cords where they press into the wood.
+   ---------------------------------------------------------------------------
+   There used to be four `border-*: Npx solid` declarations here drawing a hard
+   rectangle around every panel. THAT WAS THE BOX. The frame is now the bitmap
+   in `border-image` above and the outline it carries is ragged, so anything
+   that redraws a straight 4-sided edge on top of it puts the box straight back.
+   What is left is only light: an inset falloff so the ground darkens where the
+   cords lie over it, and a drop shadow so the panel is an object above the
+   screen rather than a hole cut in it. No `border` property. */
+.game-root .plank::after {
+  content: '';
+  position: absolute;
+  inset: -18px;
+  z-index: 2;
+  pointer-events: none;
+  border: 0;
+  /* INSET ONLY. There used to be an outer `0 20px 48px rgba(0,0,0,.92)` drop
+     shadow here as well, and against the near-black backgrounds this chrome
+     lives on it painted a soft but unmistakably RECTANGULAR dark halo hanging
+     below every panel — a second box, drawn in shadow, immediately outside the
+     ragged frame that had just been authored to get rid of the first one.
+     The frame's own art carries the depth: the cords are shaded as round lit
+     objects, and their alpha already reads as something sitting above the
+     screen. What is left here is only the ground darkening under the cords. */
+  box-shadow:
+    inset 0 0 30px 12px rgba(0, 0, 0, 0.58),   /* the cords shadow the ground */
+    inset 0 3px 14px rgba(0, 0, 0, 0.38);      /* heavier under the top run */
+  filter: url(#gr-tornsoft);
+}
+
+/* Layer 3 — THE FRAME. A real 9-slice bitmap, `border-image`, not a border.
+   ---------------------------------------------------------------------------
+   This replaced eight `<span>`s that drew four flat grey rectangles at the
+   corners plus four dots. A critic zoomed one at native crop and reported it as
+   "a flat untextured grey RECTANGLE" against Amnesia's sculpted bone/vine
+   bracket that curls into a spiral. That was correct, and no amount of gradient
+   stacking fixes it: the fault was that the corner had no DRAWING in it.
+
+   `assets/ui/frame-cord.png` is authored art — 512x512 RGBA, 150px slice, built
+   by tools/ui/mkframe.py. Every cord in it is a traced parametric curve given a
+   hemispherical cross-section, a top-left key light, crevice occlusion between
+   overlapping strands and a wet specular ridge, so it reads as Billy's own
+   flesh-cord rather than as a red line. At each corner the edge bundle turns
+   through a quarter arc, crosses itself in a knot, and throws three spiralling
+   flourishes and a handful of tapering tendrils.
+
+   Two properties matter and are the whole reason this is a PNG:
+
+   1. THE ALPHA CHANNEL IS THE SILHOUETTE. The panel's outline against black is
+      now the ragged outline of the cords themselves — irregular line weight,
+      no straight edge anywhere on any of the four sides. A CSS border cannot
+      have a non-rectangular outline. This is the measured deficit.
+   2. THE EDGE STRIPS TILE. Every modulation on an edge cord (lateral offset,
+      radius ripple) is an integer harmonic of the tile period and the cord runs
+      a whole number of periods past each end, so `repeat: round` butts the
+      strip against itself invisibly. Verified numerically: the joint RMS
+      between a strip's first and last column is 2.1-7.9/255, down from 38-46
+      when the modulation was aperiodic. A wide panel and a narrow one get the
+      same cord thickness; `stretch` would have squashed it.
+
+   One asset, one rule, every window: menu, pause, game-over, win, loading. */
+.game-root .plank {
+  /* The border box is the frame's own thickness. `fill` is off — the centre of
+     the source is transparent anyway and we want the plank's own ground there. */
+  border-style: solid;
+  /* The border box has to be big enough that the cords are drawn at close to
+     their authored scale. `border-image-width` scales the 150px source slice
+     down to fit; at 42px that is a 3.5x squash and the cords render as thin red
+     lines with unreadable corner spirals. 74px is a 2.0x reduction, which at
+     the 1280x720 the harness captures leaves each cord ~7px across and the
+     corner spiral clearly a spiral. Non-uniform on all four sides, because the
+     art is not symmetric and neither is real cordage. */
+  border-width: 52px 48px 56px 48px;
+  border-image-source: url('/assets/ui/frame-cord.png');
+  border-image-slice: 150;
+  border-image-width: 78px 72px 82px 72px;
+  /* Outset pulls the frame OUTWARD past the border box so the cords overhang
+     the wood rather than sitting on top of it. This is what makes the ragged
+     alpha the panel's actual outline: the wood ends inside, the cords end
+     outside, and what you see against black is cord. */
+  border-image-outset: 26px 24px 27px 24px;
+  border-image-repeat: round;
+}
+/* On a small panel the frame would eat the content box. Nothing in this file
+   sizes below ~300px, but the outset means the art can hang past the element,
+   so the overlay must not clip it. */
+.game-root .overlay { overflow: visible; }
+
+/* ---------------------------------------------------------------- loading --
+   An authored plate, not a title fading up out of black.
+
+   Amnesia's loading screen is a hand-painted dead rose you sit and look at
+   (measured mean luminance 46/255). Ours was the title ghosting up over black —
+   the critic measured it and found the honest loading screen the spec asks for
+   was effectively never seen, because it was gone inside 1.2s.
+
+   So: a real crop of `son.png` — his hand and the flesh-cords of the forearm,
+   deliberately NOT the face, because the face is the jumpscare's payload and
+   spending it here would blunt the only image the whole game is building
+   toward. Desaturated, dimmed and scaled so it reads as a detail of something
+   rather than a monster reveal, held under grain and a slow drift.
+
+   `LOAD_PLATE_MIN_MS` in GameCanvas.tsx holds this on screen for a real
+   duration. That is an authored beat, not a fake progress bar: the bar and the
+   percentage underneath report the true load fraction throughout. */
+.game-root .overlay--loading {
+  background: #050202;
+  justify-content: flex-end;
+  gap: 0;
+  /* Above the menu, which is mounted and fading in underneath during the
+     600ms cross-dissolve. Both are `.overlay` at z-index 10, so without this
+     the source order would decide it and the menu would pop in on top. */
+  z-index: 11;
+}
+/* The plate itself: a positioned crop, not a background-size:cover cheat, so
+   the framing is the same on every aspect ratio. */
+.game-root .loading-plate {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  /* Fed from JS as a RELATIVE url — see --gr-son in GameCanvas.
+     An absolute '/assets/...' resolves against the GATEWAY root, not the app
+     root, so it 404s once this is served from /_/raw/<cid>/. It also meant the
+     preloader (which warms 'assets/images/son.png') and this rule were fetching
+     two different URLs, so the plate was never actually preloaded. */
+  background-image: var(--gr-son);
+  /* THE CROP, chosen by measuring the source and looking at candidates at 3x.
+     ---------------------------------------------------------------------------
+     son.png is an 816x624 plate of a small figure on black — 62% of its pixels
+     are literally 0,0,0 and its brightest region is the father's torch bloom on
+     Billy's sternum. Which part you land on is therefore the whole difference
+     between an authored image and a smudge, and the previous framing (30% 34%
+     at 300%) landed on his HEAD: captured, that read as a pale grey ghost blob
+     floating in the upper right, washed out and belonging to no palette. The
+     file's own comment already said the face must not be spent here, because the
+     face is the jumpscare's payload; the framing had drifted off it anyway.
+
+     42.3% / 61.7% at 367% is his LEFT FOREARM AND HAND: the son's pale grey,
+     two-months-frozen arm hanging out of a torso of woven red cords, with the
+     cords of hip and thigh filling the right of the frame. That is GAME-SPEC
+     section 1 in one image — the killer's melted flesh wound around the boy's
+     surviving pieces — and it is the only crop in the file where the body
+     unambiguously reads as WOVEN rather than as a lit shape. It also puts the
+     subject off-centre and to the right, which leaves the left half of the frame
+     for the title without the two fighting. Verified by cropping the source at
+     3x and looking at four candidates before choosing. */
+  background-size: auto 367%;
+  background-position: 42.3% 61.7%;
+  background-repeat: no-repeat;
+  /* Graded into the game's three colours: knock the value down hard, keep just
+     enough saturation for the flesh to be red rather than grey, and let
+     sepia+hue-rotate carry what is left toward the ember the rest of the chrome
+     is lit by. Without this the plate is the only cool-grey surface in the
+     build and it reads as a stock photo. */
+  /* Measured, not eyeballed: raw son.png has an R/B ratio of 1.10 (essentially
+     neutral). After this grade the plate's lit pixels measure R/B 1.31, i.e. it
+     now sits with the ember chrome instead of reading as a cool grey insert. */
+  filter:
+    brightness(0.52) contrast(1.3) saturate(0.62)
+    sepia(0.42) hue-rotate(-16deg);
+  /* Feathered to black on every side so it reads as a plate lit by one failing
+     source, with no rectangle edge anywhere. The ellipse follows the SUBJECT,
+     which after the recrop sits right of centre and low: centred at 58%/52% so
+     the hand and the cord-mass are inside the lit pool and the left third falls
+     away into the black the title block occupies. */
+  -webkit-mask-image: radial-gradient(ellipse 58% 64% at 58% 52%, #000 0%, rgba(0,0,0,0.74) 44%, transparent 84%);
+  mask-image: radial-gradient(ellipse 58% 64% at 58% 52%, #000 0%, rgba(0,0,0,0.74) 44%, transparent 84%);
+  animation: gr-platedrift 26s ease-in-out infinite alternate;
+  will-change: transform;
+}
+/* A second, much slower light over the plate: the torch the father is holding
+   has not settled either. A wide soft ember pool that creeps across the frame
+   over half a minute, so the plate is never twice the same and the hold has
+   something happening in it besides a bar filling. Deliberately far too slow to
+   consciously watch — you should only be able to tell it was never quite still.
+
+   This is what makes the hold EARN its time rather than merely take it: a static
+   image held for three seconds is a stall, an image with a light moving over it
+   is a shot. */
+.game-root .loading-plate::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 46% 52% at 60% 46%,
+                              rgba(196, 92, 48, 0.14) 0%,
+                              rgba(120, 34, 14, 0.07) 42%,
+                              transparent 74%);
+  mix-blend-mode: screen;
+  animation: gr-platetorch 31s ease-in-out infinite alternate;
+}
+@keyframes gr-platetorch {
+  from { transform: translate(-4%, 2%) scale(1); opacity: 0.75; }
+  to   { transform: translate(5%, -3%) scale(1.14); opacity: 1; }
+}
+/* Barely moving. If you can see it move it is too fast; it should only be
+   apparent that the image was never quite still. */
+@keyframes gr-platedrift {
+  from { transform: scale(1.0) translate(0, 0); }
+  to   { transform: scale(1.06) translate(-1.2%, 0.8%); }
+}
+/* ---- THE PLATE'S LAYOUT ----------------------------------------------------
+   Restructured from a small bottom-centred caption plank into a title card.
+
+   The old arrangement put the wordmark INSIDE a 380px plank at the bottom of an
+   otherwise empty frame, which captured as a strip of text in a box under a
+   large area of nothing — a progress dialog, not a plate. Amnesia's loading
+   screen is a composition: the painting is the frame, and the text is a small
+   quiet thing that knows it is not the subject.
+
+   So: the plate is the subject and takes the frame. The wordmark stands free on
+   the left, over the dark side of the image where the mask has fallen away,
+   at the same weight as the menu's title so the two read as one authored set.
+   The progress apparatus is pushed to the bottom left corner and made small,
+   because it is machinery and machinery should be quiet.
+
+   Left-aligned, not centred: the subject is right of centre after the recrop
+   (see `.loading-plate`), so a centred block would sit on top of the hand. This
+   is why the crop and the type were chosen together. */
+.game-root .overlay--loading {
+  align-items: flex-start;
+  justify-content: center;
+}
+.game-root .loading-inner {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 0;
+  margin: 0 0 0 clamp(2rem, 7vw, 6.5rem);
+  padding: 0;
+  /* Not `max-width` on the flex container: that constrained the TITLE too, and
+     at 52vw "REVENGE OF THE" wrapped to "REVENGE OF / THE" — captured and
+     confirmed. The measure belongs on the prose, so the wordmark is free to be
+     as wide as it needs and the epigraph is held to a readable line length. */
+  max-width: 56vw;
+}
+/* The loading block is deliberately NOT a plank. Every other window in the game
+   is one, and that is correct for a window — a thing you interact with, laid over
+   the world. This is not a window: it is the title card of the picture behind it,
+   and putting a wooden panel around it makes the image a background for a dialog
+   instead of the plate the beat is built on. The type carries itself here, the
+   way a film title does. */
+.game-root .loading-eyebrow {
+  font-family: system-ui, sans-serif;
+  font-size: 0.6rem;
+  letter-spacing: 0.46em;
+  text-indent: 0.46em;
+  text-transform: uppercase;
+  color: rgba(150, 92, 74, 0.72);
+  margin-bottom: 1.5rem;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  animation: gr-loadrise 1.5s ease both;
+}
+.game-root .loading-title {
+  font-size: clamp(1.5rem, 4.4vw, 2.9rem);
+  line-height: 1.02;
+  letter-spacing: 0.16em;
+  /* The wordmark is two authored lines and must never become three. */
+  white-space: nowrap;
+  color: #e2d7ca;
+  text-shadow: 0 0 32px rgba(200, 51, 15, 0.42), 0 2px 6px rgba(0, 0, 0, 0.95);
+  /* Barely-there flicker: the title is lit by the same failing source as
+     everything else in this place. */
+  animation: gr-loadrise 1.9s ease both, gr-titleflick 5.5s linear 1.9s infinite;
+}
+/* Second word takes the ember, exactly as on the main menu — the loading plate
+   and the menu are the same wordmark seen twice, so a player registers the
+   second as a return rather than as a different screen. */
+.game-root .loading-title b {
+  display: block;
+  font-weight: 400;
+  color: var(--ember);
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+}
+@keyframes gr-titleflick {
+  0%, 42%, 46%, 71%, 74%, 100% { opacity: 1; }
+  44%  { opacity: 0.55; }
+  72%  { opacity: 0.72; }
+}
+/* Each element arrives on its own delay so the plate ASSEMBLES over its first
+   second and a half instead of appearing whole. That staging is most of what
+   makes a held screen feel authored rather than stalled. */
+@keyframes gr-loadrise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+.game-root .loading-rule {
+  width: min(360px, 46vw);
+  height: 1px;
+  margin: 1.5rem 0 1.3rem;
+  background: linear-gradient(90deg, #7a1f09, #5a2418 46%, transparent);
+  animation: gr-loadrise 2.2s ease both;
+}
+/* The epigraph. The hold needs something to spend its seconds ON, or holding it
+   is just a stall with a nicer picture. Three lines of the fiction — GAME-SPEC
+   section 1 — placed where a player's eye lands while the bar fills, so by the
+   time the menu arrives they know who is in the maze and why. Nothing else in
+   the shipped game ever tells them; the win screen alludes to it after the fact
+   and the main menu has one line of room. This is where it goes. */
+.game-root .loading-epigraph {
+  margin: 0 0 1.9rem;
+  /* The measure lives here, not on the container — see `.loading-inner`. Three
+     authored lines at ~62 characters; wider and the eye loses the return, and
+     the whole point of the hold is that these get read. */
+  max-width: 46ch;
+  text-wrap: balance;
+  font-style: italic;
+  font-size: clamp(0.78rem, 1.5vw, 0.95rem);
+  line-height: 1.85;
+  color: rgba(170, 156, 144, 0.82);
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.95), 0 0 14px rgba(0, 0, 0, 0.85);
+  animation: gr-loadrise 2.8s ease both;
+}
+.game-root .loading-epigraph em {
+  font-style: italic;
+  color: rgba(206, 132, 106, 0.9);
+}
+/* ---- the machinery, kept small and low ---- */
+.game-root .loading-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(320px, 44vw);
+  animation: gr-loadrise 3.2s ease both;
+}
+/* A groove scribed into the dark with something wet running along it, not a
+   progress bar with a glow. Same construction as the pause sliders' track:
+   black channel, lit lower lip. */
+.game-root .loading-bar {
+  height: 3px;
+  background: linear-gradient(180deg, #000 0 2px, rgba(150, 100, 62, 0.22) 2px 3px);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.95);
+  overflow: hidden;
+  position: relative;
+}
+.game-root .loading-bar > div {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(122, 31, 9, 0.9), var(--ember));
+  transition: width 0.35s ease;
+  box-shadow: 0 0 10px rgba(200, 51, 15, 0.75);
+}
+.game-root .loading-meterrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+.game-root .loading-label {
+  font-size: 0.72rem;
+  color: rgba(158, 145, 135, 0.85);
+  font-style: italic;
+  letter-spacing: 0.08em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+}
+.game-root .loading-pct {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.24em;
+  color: rgba(122, 111, 102, 0.9);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+}
+/* The hand-off. The plate does not cut to the menu — it fades, over 600ms, with
+   the last of it still on screen as the menu's own 2.4s fade-in begins. Cutting
+   is what made the old screen feel like it had not happened: one frame it was
+   there and the next it was gone, so there was no moment at which a player could
+   notice it ending. `.is-leaving` is set by GameCanvas.tsx one fade-length before
+   the element is unmounted. */
+.game-root .overlay--loading.is-leaving {
+  opacity: 0;
+  transition: opacity 0.6s ease-in;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------- menu --
+   Translucent, not opaque. The game renders continuously in every phase, so the
+   maze is genuinely behind this; `backdrop-filter` blurs and dims it rather
+   than a fill hiding it. See the note at the top about the menu camera. */
+.game-root .overlay--menu {
+  /* FULLY OPAQUE. The 3D scene must not show through the menu.
+     ---------------------------------------------------------------------------
+     A live menu camera drifts the real maze behind this overlay, and with a
+     translucent scrim its flashlight beam composited over the eye as a pale
+     diagonal streak. The user read that exactly as it looks: "the gameplay in the
+     background makes it as if there's something wrong with the drawing".
+     They are right — two unrelated images sharing a frame is not atmosphere, it
+     is a rendering fault, and no amount of tuning the blur fixes it because the
+     beam MOVES.
+     The canvas keeps rendering underneath (so Descend is instant and the audio
+     bed is already running); it is simply no longer visible. Opaque base colour,
+     no backdrop-filter, nothing to see through. */
+  background: #050303;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* A REAL SURFACE behind the menu, not a gradient.
+   ---------------------------------------------------------------------------
+   The Frictional HPL2 menu.cfg sets `BGScene = "menu_bg.map"` with its own
+   camera and ambient track: Amnesia's main menu background is a lit 3D room you
+   are looking into, which is why a critic measured its saturation at 0.079
+   against our 0.404 — a flat red CSS gradient has to carry all its colour in
+   hue because it has no light and no material to carry it in value.
+   A live menu camera lives in game.ts, which this lane does not own; it is
+   requested in docs/handoff/ui-menus.md and this rule composites correctly
+   underneath it the moment it lands.
+   Until then the honest half-measure is to put actual image data back here:
+   the maze's own wall at a grazing scale, dark, desaturated, slowly drifting,
+   so the field behind the title has grain and structure instead of being a
+   single smooth red ramp. */
+.game-root .overlay--menu .menu-bg {
+  position: absolute;
+  inset: -6%;
+  z-index: 0;
+  pointer-events: none;
+  /* sonEye.png — the boy's eye, red iris veined in darker red, looking straight
+     out of the screen. It replaces a tiled wall texture that was only ever a
+     stand-in for "that dark is not empty".
+     The menu is the one screen the player looks AT rather than through, and this
+     is the game's own art of the thing that is waiting for them, so it earns the
+     space. It is also the correct reading of the fiction: you do not open this
+     game and see a maze, you see him already watching. */
+  /* Relative, via JS. Same reason as --gr-son above. */
+  background-image: var(--gr-soneye);
+  background-size: cover;
+  background-position: 50% 42%;
+  background-repeat: no-repeat;
+  /* Held back enough to sit UNDER the type without fighting it, but nowhere near
+     the 0.19 the wall texture needed — that would throw away the subject. The
+     desaturation keeps it in the game's palette rather than letting the iris go
+     pink, and the slight contrast lift keeps the veins legible once it is dimmed. */
+  filter: brightness(0.94) saturate(0.9) contrast(1.18);
+  /* Vignette hard at the edges so the eye emerges from black rather than sitting
+     in a rectangle. */
+  -webkit-mask-image: radial-gradient(ellipse 72% 74% at 50% 44%, #000 0%, rgba(0,0,0,0.88) 52%, transparent 88%);
+  mask-image: radial-gradient(ellipse 72% 74% at 50% 44%, #000 0%, rgba(0,0,0,0.88) 52%, transparent 88%);
+  animation: gr-menubgdrift 44s ease-in-out infinite alternate;
+  will-change: transform;
+}
+@keyframes gr-menubgdrift {
+  from { transform: scale(1.00) translate(0, 0); }
+  to   { transform: scale(1.07) translate(1.4%, -1.1%); }
+}
+/* The title stands free above the panel — Amnesia's wordmark is not inside the
+   frame either. Only the interactive block gets the plank. */
+.game-root .menu-inner {
+  /* Title top-RIGHT, panel bottom-LEFT, eye between them.
+     ---------------------------------------------------------------------------
+     Two anchored blocks in opposite corners rather than a stack, so neither can
+     crowd the artwork and the diagonal between them leaves the iris clear.
+     Absolute positioning inside a full-bleed relative box is the only way to put
+     two children in opposite corners without a wrapper each; a flex column can
+     only ever distribute them along one axis. */
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;      /* children re-enable it; the gap must not eat clicks */
+  animation: gr-menuin 2.4s ease both;
+}
+
+/* TOP RIGHT, centred within itself. */
+.game-root .menu-inner > .title {
+  position: absolute;
+  top: clamp(2rem, 6vh, 4.5rem);
+  right: clamp(2.5rem, 5vw, 5.5rem);
+  width: min(42%, 34rem);
+  text-align: center;
+  margin: 0;
+  padding: 1.1rem 1.4rem 1.3rem;
+  /* A soft scrim under the type.
+     The title sits over the eye's dark upper lid, and "RETRIEVED" — red on
+     near-black — was effectively invisible there. Brightening the ink alone is
+     not a reliable fix, because the artwork behind it varies: an ellipse of
+     shadow guarantees the contrast wherever the word lands. Feathered to
+     transparent so it never reads as a box. */
+  background: radial-gradient(ellipse 76% 130% at 50% 46%,
+    rgba(3, 2, 2, 0.82) 0%, rgba(3, 2, 2, 0.55) 48%, rgba(3, 2, 2, 0) 78%);
+}
+
+/* BOTTOM LEFT, contents centred.
+   The positioning moved from the plank onto a COLUMN that holds the board and
+   the plank together. The plank alone used to be the absolutely-positioned
+   child, which left the scoreboard — an ordinary flow sibling — stranded at the
+   container's top-left corner, over the eye. Anchoring the column at the bottom
+   and letting it grow upward also means the plank may change height (it does:
+   signed in, it gains a username field) and the board may gain rows, without
+   either needing an offset that knows about the other. */
+.game-root .menu-inner > .menu-left {
+  position: absolute;
+  left: clamp(2.5rem, 5vw, 5.5rem);
+  bottom: clamp(2rem, 6vh, 4.5rem);
+  width: min(30%, 25rem);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
+}
+.game-root .menu-left > .menu-plank {
+  align-items: center;
+  text-align: center;
+}
+
+
+/* The menu's own plank: the block holding the tagline, the button and the
+   control legend. Wider padding than the pause panel because it carries more. */
+.game-root .menu-plank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  /* Smaller and more transparent, so the eye behind it stays the subject.
+     User: "make the menu less opaque or even a bit smaller" — both, since the
+     panel was sized to be the only thing on the screen and now it is not. */
+  /* Compact. Measured at 1440x600 the panel was 250px tall, so even bottom-
+     aligned it reached back up into the iris — which is exactly what the user
+     saw. Everything here is about height: tighter gap, tighter padding, and the
+     control legend allowed to run as one line rather than wrapping. */
+  gap: 0.55rem;
+  padding: 0.9rem 1.4rem 0.8rem;
+  /* Fills the column, so its left edge lines up with the title's exactly. */
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  box-sizing: border-box;
+  margin-top: 0;
+  opacity: 0.88;
+}
+/* The plank's own surface, dialled back over real art. */
+.game-root .menu-plank.plank {
+  background-color: rgba(9, 5, 4, 0.52);
+}
+.game-root .menu-plank .tagline {
+  margin: 0;
+  font-size: clamp(0.72rem, 1.15vw, 0.86rem);
+  line-height: 1.35;
+  max-width: 40ch;
+}
+.game-root .menu-plank .controls {
+  margin-top: 0.15rem;
+  gap: 0.85rem;
+  font-size: 0.6rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+@keyframes gr-menuin {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.game-root .title {
+  margin: 0;
+  /* Was clamp(1.9rem, 6.5vw, 4.2rem) — 6.5vw is a VIEWPORT measure, so on a wide
+     monitor the title grew until its right edge ran into the iris. Sized against
+     the column instead, and smaller: it is a title over a picture, not a poster. */
+  font-size: clamp(1.5rem, 2.6vw, 2.5rem);
+  letter-spacing: 0.14em;
+  line-height: 1.06;
+  font-weight: 400;
+  color: #e8ded1;
+  text-shadow: 0 0 34px rgba(200, 51, 15, 0.5), 0 0 6px rgba(0, 0, 0, 0.9);
+}
+.game-root .title span {
+  display: block;
+  /* Brighter than `--ember` and given its own glow. Over the menu's dark upper
+     lid the ember red measured as near-invisible — the word simply was not there.
+     Contrast has to come from VALUE, not hue, against a background this dark. */
+  color: #e8593a;
+  text-shadow: 0 0 22px rgba(226, 72, 40, 0.55), 0 2px 6px rgba(0, 0, 0, 0.95);
+  letter-spacing: 0.26em;
+  text-indent: 0.3em;
+  /* The second word is the one he owns. It gutters. */
+  animation: gr-emberflick 6.5s linear infinite;
+}
+@keyframes gr-emberflick {
+  0%, 30%, 33%, 62%, 64%, 88%, 100% {
+    opacity: 1;
+    text-shadow: 0 0 34px rgba(200, 51, 15, 0.55), 0 0 6px rgba(0, 0, 0, 0.9);
+  }
+  31.5% { opacity: 0.62; text-shadow: 0 0 8px rgba(200, 51, 15, 0.2); }
+  63%   { opacity: 0.78; text-shadow: 0 0 14px rgba(200, 51, 15, 0.3); }
+  89%   { opacity: 0.55; text-shadow: 0 0 6px rgba(200, 51, 15, 0.15); }
+}
+.game-root .title-rule {
+  width: min(420px, 62vw);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #5a2418 22%, #7a1f09 50%, #5a2418 78%, transparent);
+  margin: 0.2rem 0 0.1rem;
+}
+.game-root .tagline {
+  margin: 0 0 0.4rem;
+  max-width: 34ch;
+  font-style: italic;
+  color: #b4a696;
+  font-size: clamp(0.85rem, 1.7vw, 1.05rem);
+  line-height: 1.6;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.95), 0 0 14px rgba(0, 0, 0, 0.75);
+}
+.game-root .controls {
+  display: flex;
+  gap: 1.6rem;
+  margin-top: 1.4rem;
+  font-family: system-ui, sans-serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #7d7268;
+  flex-wrap: wrap;
+  justify-content: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+}
+.game-root .controls b { color: #b3a496; font-weight: 600; }
+
+/* ---------------------------------------------------------------- buttons --
+   A button is a dark metal plate recessed INTO the plank, not a translucent
+   rectangle floating on it.
+
+   The distinction is load-bearing and it is a bug this file used to have: with
+   `background: rgba(20,8,6,.72)` over a bitmap ground, the wood grain showed
+   straight through the button and every control read as a lighter smudge on the
+   panel rather than as a separate part. Opaque fill plus an inset shadow on the
+   top edge and a lit arris on the bottom is what makes a shape read as sunk
+   into the surface it sits on. */
+.game-root .btn {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  border: 0;
+  border-radius: 0;
+  /* Opaque, graded, AND made of the same wood as the panel it is cut into.
+     It used to be a bare `linear-gradient` — which at native crop is a flat
+     grey-brown rectangle, the same failure the corner fittings had one layer
+     up. A recess milled into a plank exposes the plank's own end grain, darker
+     because it is in shadow and rougher because it is a cut face. The wood is
+     drawn at a different scale and rotation from the panel's ground so the
+     grain does not line up across the edge of the cut, which is what sells it
+     as a separate face rather than a hole you can see the panel through. */
+  background-image:
+    linear-gradient(180deg, rgba(26, 13, 10, 0.90) 0%, rgba(18, 8, 6, 0.94) 52%, rgba(11, 5, 4, 0.97) 100%),
+    url('/assets/textures/woodWall.png');
+  background-size: auto, 320px;
+  background-position: center, 24% 62%;
+  background-color: #0a0403;
+  color: var(--bone);
+  font-family: 'Georgia', 'Times New Roman', serif;
+  font-size: 0.95rem;
+  letter-spacing: 0.22em;
+  text-indent: 0.22em;
+  text-transform: uppercase;
+  padding: 0.75rem 2.1rem;
+  cursor: pointer;
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.95),        /* shadow cast by the rim above */
+    inset 0 0 0 1px rgba(0, 0, 0, 0.7),         /* the cut itself */
+    inset 0 -1px 0 rgba(168, 118, 74, 0.28),    /* light catching the low arris */
+    0 1px 0 rgba(150, 104, 62, 0.14);           /* the wood's edge below the cut */
+  transition: background 0.25s ease, color 0.25s ease, box-shadow 0.25s ease,
+              letter-spacing 0.25s ease;
+}
+/* Touched: the recess fills with ember light, as if something behind it woke. */
+.game-root .btn:hover,
+.game-root .btn:focus-visible {
+  /* `background-image`, NOT the `background` shorthand — the shorthand would
+     reset `background-size`/`background-position` and drop the wood layer,
+     so the button would lose its material the instant you touched it. */
+  background-image:
+    linear-gradient(180deg, rgba(72, 22, 10, 0.86) 0%, rgba(50, 14, 7, 0.90) 55%, rgba(28, 8, 6, 0.94) 100%),
+    url('/assets/textures/woodWall.png');
+  color: #fff;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  outline: none;
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.9),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.6),
+    inset 0 0 22px rgba(200, 51, 15, 0.45),
+    inset 0 -1px 0 rgba(220, 150, 90, 0.4),
+    0 1px 0 rgba(150, 104, 62, 0.14);
+}
+.game-root .btn--primary {
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.95),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.7),
+    inset 0 0 26px rgba(140, 34, 12, 0.3),
+    inset 0 -1px 0 rgba(196, 136, 84, 0.36),
+    0 1px 0 rgba(150, 104, 62, 0.16);
+}
+.game-root .btn--ghost {
+  color: #8a7d70;
+  font-size: 0.8rem;
+  padding: 0.55rem 1.5rem;
+  box-shadow:
+    inset 0 1px 4px rgba(0, 0, 0, 0.85),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.6),
+    inset 0 -1px 0 rgba(140, 98, 62, 0.18);
+}
+
+/* -------------------------------------------------------------------- HUD --
+   Diegetic and quiet. The count is not a scoreboard — it is scratched on the
+   inside of the player's own eye. No bright cyan dot; the gems in the world
+   already carry that colour, and the HUD should not compete with them. */
+.game-root .hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.game-root .hud-gems {
+  position: absolute;
+  left: 2rem;
+  bottom: 1.8rem;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.8rem;
+  /* Was opacity 0.42 at 15px tall, on the theory that a HUD should be "readable
+     when you look for it, invisible when you are busy being hunted". The user's
+     verdict in play was "the gems counter is also really small and difficult to
+     see", so the theory lost to the evidence.
+     0.78 still sits back from the image — it is not a bright UI slab — but it is
+     legible at a glance against a dark corridor, which is the actual job. */
+  opacity: 0.78;
+  transition: opacity 0.6s ease;
+}
+/* A short pulse of full legibility the moment the count changes. */
+.game-root .hud-gems.is-pulsed { opacity: 1; }
+
+.game-root .hud-tally {
+  display: flex;
+  align-items: flex-end;
+  /* Every dimension here is ~1.7x its previous value. The tally is read as a
+     SHAPE at a glance, and a shape needs area — scaling the ticks up buys far more
+     legibility than raising opacity alone, without turning it into a bright slab. */
+  gap: 6px;
+  height: 26px;
+}
+/* One tick per gem: an unlit tick is a dry scratch in the dark, a lit one is
+   wet. You read your progress as a shape, not a number.
+
+   The lit tick used to be `rgba(150,214,238,.9)` with a cyan bloom — a leftover
+   from when the gems were pale blue. A critic measured the whole build's palette
+   and found this the single element outside GAME-SPEC 6a's grey / hair-brown /
+   wet-red: the gems are now dark red crystals, so a cyan HUD was reporting a
+   colour that no longer exists in the world. It is the same red as the frame
+   cord now, which is also the same red Billy is made of. */
+.game-root .hud-tick {
+  width: 4px;
+  height: 19px;
+  background: rgba(140, 130, 120, 0.62);
+  transform: skewX(-12deg);
+}
+.game-root .hud-tick.is-got {
+  height: 26px;
+  /* Wet, not neon: a dark arterial body with a brighter top, the way the cords
+     read where the torch catches them. */
+  background: linear-gradient(180deg, rgba(226, 96, 62, 0.95) 0%, rgba(168, 34, 14, 0.95) 55%, rgba(96, 16, 8, 0.9) 100%);
+  box-shadow: 0 0 7px rgba(190, 44, 16, 0.7);
+}
+.game-root .hud-count {
+  /* 0.72rem measured about 11px — genuinely hard to read against a dark corridor,
+     which is what the user reported. 1.15rem is legible without shouting. */
+  font-size: 1.15rem;
+  letter-spacing: 0.2em;
+  color: rgba(214, 204, 194, 0.88);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  padding-bottom: 2px;
+  /* A little lift off the wall behind it, so it never sits at the same value as
+     the plank texture and disappear into it. */
+  text-shadow: 0 0 10px rgba(0, 0, 0, 0.95), 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+.game-root .hud-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 24%;
+  transform: translateX(-50%);
+  font-style: italic;
+  font-size: 1.05rem;
+  color: rgba(224, 196, 168, 0.85);
+  text-shadow: 0 0 18px rgba(0, 0, 0, 0.95), 0 0 40px rgba(160, 40, 14, 0.5);
+  animation: gr-fadeinout 6s ease forwards;
+  white-space: nowrap;
+}
+.game-root .hud-lockhint {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  transform: translate(-50%, -50%);
+  font-size: 0.68rem;
+  letter-spacing: 0.32em;
+  text-indent: 0.32em;
+  text-transform: uppercase;
+  color: rgba(170, 158, 148, 0.4);
+  animation: gr-lockpulse 3.4s ease-in-out infinite;
+}
+@keyframes gr-lockpulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.75; }
+}
+@keyframes gr-fadeinout {
+  0%   { opacity: 0; }
+  12%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ------------------------------------------------------------------ pause --
+   The pause screen is where the live-world compositing already pays off today:
+   the camera is standing wherever the player left it, lit by their own torch,
+   and the blur behind this panel is blurring an actual corridor. Deliberately
+   less opaque than the menu for exactly that reason — you should still be able
+   to tell where you were standing when you stopped. */
+.game-root .overlay--pause {
+  background: rgba(3, 1, 1, 0.48);
+  backdrop-filter: blur(11px) saturate(0.5) brightness(0.6);
+  -webkit-backdrop-filter: blur(11px) saturate(0.5) brightness(0.6);
+}
+.game-root .pause-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.15rem;
+  padding: 2.4rem 3.2rem 2rem;
+  min-width: min(420px, 84vw);
+  animation: gr-panelin 0.32s ease both;
+}
+.game-root .pause-title {
+  margin: 0 0 0.3rem;
+  font-size: 1.15rem;
+  font-weight: 400;
+  letter-spacing: 0.42em;
+  text-indent: 0.42em;
+  color: #c3b5a6;
+  text-transform: uppercase;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.95), 0 0 14px rgba(0, 0, 0, 0.8);
+}
+.game-root .pause-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+  align-items: stretch;
+}
+.game-root .pause-buttons .btn { width: 100%; text-align: center; }
+
+/* ---- sliders. Styled to match the tally, not an OS form control. ---- */
+.game-root .settings {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin: 0.5rem 0 0.35rem;
+  padding-top: 1rem;
+  /* A scribed line in the wood, not a CSS hairline: dark groove with a lit
+     lower lip, and faded at both ends so it does not terminate in a hard pixel. */
+  border-top: 0;
+  background-image:
+    linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.85) 12%, rgba(0, 0, 0, 0.85) 88%, transparent),
+    linear-gradient(90deg, transparent, rgba(178, 128, 80, 0.26) 12%, rgba(178, 128, 80, 0.26) 88%, transparent);
+  background-size: 100% 1px, 100% 1px;
+  background-position: 0 0, 0 1px;
+  background-repeat: no-repeat;
+}
+.game-root .setting {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  text-align: left;
+}
+/* Text over a bitmap needs its own shadow or the grain eats it. Every label,
+   count and caption in this file that lands on a plank carries one. */
+.game-root .setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: system-ui, sans-serif;
+  font-size: 0.66rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #a1948a;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 8px rgba(0, 0, 0, 0.8);
+}
+.game-root .setting-row output {
+  font-variant-numeric: tabular-nums;
+  color: #cbbdae;
+  letter-spacing: 0.1em;
+}
+.game-root .slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+/* The track is a groove cut into the plank: black channel, lit lower lip. Over
+   a bitmap ground a flat `#341c16` bar reads as a sticker, the same failure the
+   buttons had. */
+.game-root .slider::-webkit-slider-runnable-track {
+  height: 3px;
+  background: linear-gradient(180deg, #000 0 2px, rgba(178, 128, 80, 0.3) 2px 3px);
+  border: none;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+.game-root .slider::-moz-range-track {
+  height: 3px;
+  background: linear-gradient(180deg, #000 0 2px, rgba(178, 128, 80, 0.3) 2px 3px);
+  border: none;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+.game-root .slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 3px;
+  height: 14px;
+  margin-top: -6px;
+  border: none;
+  border-radius: 0;
+  background: var(--ember);
+  box-shadow: 0 0 10px rgba(200, 51, 15, 0.85);
+}
+.game-root .slider::-moz-range-thumb {
+  width: 3px;
+  height: 14px;
+  border: none;
+  border-radius: 0;
+  background: var(--ember);
+  box-shadow: 0 0 10px rgba(200, 51, 15, 0.85);
+}
+
+/* ------------------------------------------------- scare / end screens ----
+   The catch is a hit, not a slideshow. The image lands hard and alone; the
+   window arrives a full second later, after you have had time to understand
+   what you are looking at. */
+.game-root .overlay--scare { background: #000; gap: 0; }
+
+/* ------------------------------------------------------------------------
+   THE END-SCREEN FIELD — why these two screens get their own surface layer
+   ------------------------------------------------------------------------
+   A critic scored the end screens at flat-rectangles-on-near-black *after* the
+   plank material had already landed on them, and looking at the captured frames
+   they were right for a reason the code does not show: the panel was fine, the
+   THREE HUNDRED THOUSAND PIXELS AROUND IT were not.
+
+   `billyScare.png` is 816x624 and `son.png` is similar, both letterboxed with
+   `object-fit: contain` into a 1280x720 viewport. That leaves ~230px of dead
+   `background: #000` down each side — measured on the captured game-over frame
+   as literally 0,0,0 across the whole left and right thirds. The menu never has
+   this problem because `.menu-bg` puts real image data behind the title. The end
+   screens had nothing behind anything.
+
+   So they get the same treatment the menu got: the maze's own wall texture,
+   graded near-black, masked to a soft field, drifting. It is not decoration —
+   it is the difference between "a panel on a photograph" and "a panel and a
+   photograph both lying in the same dark room". The letterbox bars stop being
+   absence and start being the wall the picture is pinned to.
+
+   Kept deliberately below the images' own luminance so neither the plate nor the
+   panel loses the frame: the whole point is that the eye still goes to his face.
+   ------------------------------------------------------------------------ */
+.game-root .end-field {
+  position: absolute;
+  inset: -4%;
+  /* ABOVE the photograph, not behind it, and screened.
+     ---------------------------------------------------------------------------
+     Behind it was the obvious place and it was wrong, for a reason only a pixel
+     scan found. son.png is 816x624 and billyScare.png is 816x624 — 4:3 — so
+     `object-fit: contain` into a 1280x720 viewport renders them 941px wide and
+     leaves 169px letterbox bars. Those bars are not empty: the <img> element
+     still covers them, and the PNG's own pixels there are opaque 0,0,0. So a
+     field underneath was perfectly drawn and then completely occluded. The
+     horizontal luminance profile of the captured win frame showed it exactly:
+     a smooth 3.4 -> 5.5 falloff from x=0 to x=160, then hard 0.00 from x=170
+     onward — the image's left edge, to the pixel.
+
+     Screening it OVER the images instead lifts their dead black off the floor
+     while leaving everything lit untouched, because screen is asymptotic in the
+     highlights: his face, his eyes and the torch bloom are unchanged, and the
+     black around them stops being absence. Same operator, same argument, as the
+     floor under the plank's wood grain. */
+  z-index: 2;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  background-image:
+    /* An ember pool low and left, the same dying source that lights every
+       other surface in this build. Put FIRST so it composites over the wood. */
+    radial-gradient(90% 70% at 22% 104%, rgba(132, 34, 12, 0.18) 0%, transparent 64%),
+    radial-gradient(70% 60% at 84% -8%, rgba(88, 22, 9, 0.12) 0%, transparent 62%),
+    url('/assets/textures/woodWall.png'),
+    /* The same `screen` floor the plank's ground uses, and for the same measured
+       reason. woodWall.png contains genuinely black regions — the shadow between
+       planks and one large dark knot — and `filter: brightness(0.15)` over a
+       black region is still black: 0 x 0.15 = 0. The first pass of this rule was
+       captured and the left and right 150px columns measured EXACTLY 0,0,0,
+       i.e. the field was in the DOM, correctly sized, and drawing nothing.
+       Screening a floor under the grain lifts the dead pixels off zero while
+       leaving the grain that is there untouched, because screen is additive in
+       the shadows and asymptotic in the highlights. */
+    linear-gradient(172deg, #1c0f0c 0%, #17100d 44%, #120a08 100%);
+  background-size: auto, auto, 132% auto, auto;
+  background-position: center, center, 42% 62%, center;
+  /* The wood TILES. `no-repeat` on a 132%-wide, aspect-preserved bitmap leaves
+     the bottom of a 16:9 field uncovered, and the captured game-over frame
+     showed the result as a hard vertical seam at x=75 where the plank grain
+     simply stopped and the screened floor continued alone — a straight edge, in
+     the middle of the black, on a screen whose whole argument is that it has no
+     straight edges. `repeat` on the wood layer only; the two ember gradients
+     stay single. */
+  background-repeat: no-repeat, no-repeat, repeat, no-repeat;
+  background-blend-mode: normal, normal, screen, normal;
+  /* There is a lit photograph in the middle of this screen and the field must
+     stay under it. Target is a mean around 9-14/255 in the letterbox bars with
+     real structure: visible as "that dark is not empty" when you look for it,
+     never a second subject. Brighter than the first attempt's 0.15 because the
+     screened floor is what carries it now rather than the raw texture. */
+  /* Saturation is the metric this screen keeps losing on, not luminance.
+     Screened over the photograph, `saturate(0.4)` with a full-strength ember
+     wash measured the captured game-over frame at 0.541 mean saturation against
+     Amnesia's 0.118 — the field was tinting the entire image red, which is
+     exactly the fault GAME-SPEC section 6a warns about: our red has nothing to
+     contrast against because everything is already red. Pulled to 0.22 with the
+     ember gradients cut roughly in half, so the field carries VALUE and grain
+     and the only saturated things left on screen are the frame's cords and his
+     irises — which is correct, since those are the things that are supposed to
+     be wet. */
+  filter: brightness(0.6) saturate(0.22) contrast(1.24) sepia(0.24) hue-rotate(-10deg);
+  -webkit-mask-image: radial-gradient(ellipse 88% 84% at 50% 52%, #000 0%, rgba(0,0,0,0.5) 56%, transparent 92%);
+  mask-image: radial-gradient(ellipse 88% 84% at 50% 52%, #000 0%, rgba(0,0,0,0.5) 56%, transparent 92%);
+  animation: gr-menubgdrift 52s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+.game-root .scare-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* `contain` not `cover`: the source is 816x624 on black, so letterboxing is
+     invisible and nothing crops the top of his head off on a wide viewport. */
+  object-fit: contain;
+  animation: gr-scarepunch 0.42s cubic-bezier(0.2, 0.9, 0.1, 1) both;
+  will-change: transform, filter;
+}
+@keyframes gr-scarepunch {
+  0%   { transform: scale(1.85); opacity: 0; filter: brightness(3.4) contrast(1.4); }
+  14%  { opacity: 1; filter: brightness(2.2) contrast(1.3); }
+  38%  { transform: scale(1.02); filter: brightness(1.1) contrast(1.05); }
+  /* Two hard shudders after the impact — the frame refusing to settle. */
+  58%  { transform: scale(1.075) translate(6px, -4px); filter: brightness(1.45); }
+  70%  { transform: scale(1.03) translate(-5px, 3px); filter: brightness(1); }
+  84%  { transform: scale(1.06) translate(3px, 2px); filter: brightness(1.2); }
+  100% { transform: scale(1.04); opacity: 1; filter: brightness(1); }
+}
+/* A white slam frame on impact. One frame of nothing but light. */
+.game-root .scare-flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  pointer-events: none;
+  z-index: 4;
+  animation: gr-slam 0.5s ease-out both;
+}
+@keyframes gr-slam {
+  0%   { opacity: 0.92; }
+  8%   { opacity: 0.35; }
+  100% { opacity: 0; }
+}
+/* Once the window is up the image sinks back so the text is readable. */
+.game-root .overlay--scare.is-settled .scare-img {
+  animation: none;
+  transform: scale(1.04);
+  filter: brightness(0.42) saturate(0.75);
+  transition: filter 0.7s ease;
+}
+
+.game-root .overlay--win { background: #050303; gap: 0; }
+.game-root .win-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  animation: gr-winfade 2.6s ease both;
+}
+@keyframes gr-winfade {
+  from { opacity: 0; transform: scale(1.04); filter: brightness(0.3); }
+  to   { opacity: 1; transform: scale(1); filter: brightness(1); }
+}
+/* The win window sits low so it never covers his face. Same clearance argument
+   as the game-over window below — 4vh put the bottom cords off the viewport. */
+.game-root .overlay--win .end-window { margin-top: auto; margin-bottom: 11vh; }
+
+/* ---- the end window itself. NOT `.panel` — see the header note. ----
+   Also a `.plank`: the game-over and win windows are the same object as the
+   pause panel, which is what makes the chrome feel like one authored set
+   instead of three separately-styled dialogs. */
+.game-root .end-window {
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.4rem;
+  padding: 2rem 3rem 1.8rem;
+  min-width: min(400px, 80vw);
+  animation: gr-windowin 0.6s cubic-bezier(0.16, 0.8, 0.3, 1) both;
+  /* The panel is a lit object in a dark room, so it throws light on what is
+     behind it. `backdrop-filter` is how the menu earns its depth and the end
+     screens were the only windows in the build without it: there, the photograph
+     ran under the panel at full contrast and the wood had to fight it, which is
+     why the grade kept being pushed darker and darker until the interior went
+     flat. Blurring and dimming the plate UNDER the panel means the wood no
+     longer competes, so it can be graded up to the menu's level and read as
+     material instead of as a hole. */
+  backdrop-filter: blur(9px) saturate(0.5) brightness(0.42);
+  -webkit-backdrop-filter: blur(9px) saturate(0.5) brightness(0.42);
+}
+/* Over a full-bleed photograph the plank has to sit DOWN, not up.
+   On the menu and pause screens the plank is the brightest thing in frame and
+   that is correct — it is the only object. Over billyScare.png it is competing
+   with his eyes, so the window is something laid over him, not a lamp.
+   ---------------------------------------------------------------------------
+   The grade here was chased down to brightness(0.86)/(0.58) to stop the ember
+   wash reading as a hot orange bar across his face. It worked, and it cost the
+   panel its material: side by side with the main menu on captured frames, the
+   menu plank shows plank grain, a knot and the lower-left ember pool, while the
+   game-over panel is an even dark field with the wood barely resolvable. That
+   IS the "flat rectangle" a critic reports, whatever the CSS says it is made of.
+   The fix is not more brightness — it is that the panel now blurs and dims the
+   photograph beneath it (see `backdrop-filter` above), so the wood is no longer
+   competing with a lit face and can carry the SAME grade as the menu's plank.
+   One material, one grade, five windows. */
+.game-root .end-window::before {
+  filter: url(#gr-torn) brightness(0.90) saturate(0.34) contrast(1.08);
+}
+/* Still a touch down over billyScare.png specifically — that image is a lit
+   close-up that fills the frame, and the panel sits directly across his jaw.
+   Small difference now rather than the large one that flattened it, because the
+   backdrop blur is doing the separation work the grade used to do alone. */
+.game-root .overlay--scare .end-window::before {
+  /* Measured side by side against the win screen's panel on captured frames:
+     at 0.80 this interior read 9.5/255 where the win panel read 19.3, so the two
+     end screens did not look like the same object — and 9.5 is close enough to
+     the flat-black failure to be worth closing. 0.86 puts it in the same band
+     while still sitting below the win screen, which is right: this panel lies
+     across a lit close-up and that one lies over a small figure on black. */
+  filter: url(#gr-torn) brightness(0.86) saturate(0.30) contrast(1.12);
+}
+/* The game-over window sits LOW, for the same reason the win window does.
+   ---------------------------------------------------------------------------
+   GAME-SPEC 6a: "The face is the payload. billyScare.png is a close-up of the
+   son's face... The jumpscare exists to deliver *that* image." Centred, the
+   window lands square across his eyes — captured and confirmed at catch+1.5s —
+   so the one image the whole game has been building toward is covered by a
+   dialog at the exact moment it is meant to land. Pushed down, his eyes and
+   fringe are clear above the frame and his maw reads under it. */
+.game-root .overlay--scare .end-window {
+  margin-top: auto;
+  /* Measured, not chosen: at 1280x720 the window's box bottom sat at y=684 with
+     a 27px border-image outset below it, i.e. 9px of clearance — and the
+     `::before` ground runs a further 46px past THAT, under an SVG filter whose
+     region is another 14% tall. So the bottom run of cords and the whole lower
+     tear of the wood were being cut off by the viewport edge, which reads as the
+     panel being a rectangle that runs off the screen: the exact silhouette the
+     ragged frame exists to destroy. 12vh clears the outset, the ground inset and
+     the filter region with room to spare, and the window is still low enough
+     that his eyes and fringe are clear above it. */
+  margin-bottom: 12vh;
+}
+/* The cords are wet and they are the brightest thing on the panel, so they
+   BOUNCE. A faint red spill inboard of the frame on all four sides puts the
+   interior and the frame in the same light instead of leaving the wood as a
+   dark plate that a bright frame happens to surround — which is what a critic
+   reading the win screen would call a black rectangle in a nice border.
+   Inset, non-uniform (the light is from the upper left), and low enough that it
+   never becomes the subject. */
+.game-root .plank::after {
+  background:
+    radial-gradient(120% 60% at 50% -6%,  rgba(176, 44, 18, 0.16) 0%, transparent 58%),
+    radial-gradient(70% 110% at -6% 44%,  rgba(150, 36, 14, 0.13) 0%, transparent 56%),
+    radial-gradient(70% 110% at 106% 56%, rgba(120, 28, 11, 0.10) 0%, transparent 56%),
+    radial-gradient(120% 60% at 50% 106%, rgba(96, 22, 9, 0.10) 0%, transparent 54%);
+}
+@keyframes gr-windowin {
+  from { opacity: 0; transform: translateY(18px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes gr-panelin {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: none; }
+}
+.game-root .end-window h2 {
+  margin: 0;
+  font-size: clamp(1.4rem, 4vw, 2.3rem);
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+  font-weight: 400;
+  font-family: 'Georgia', 'Times New Roman', serif;
+  text-transform: none;
+  color: var(--ember);
+  text-shadow: 0 0 30px rgba(200, 51, 15, 0.5);
+}
+.game-root .end-window .end-sub {
+  margin: -0.6rem 0 0;
+  font-style: italic;
+  font-size: 0.9rem;
+  color: #b3a597;
+  /* 30ch broke the end-screen couplets mid-clause — "...the dark you made for /
+     him." — which reads as a layout accident rather than as a line. Both end
+     screens now carry an explicit <br/> between their two lines, so this only has
+     to be wide enough not to wrap them a second time. */
+  max-width: 44ch;
+  line-height: 1.55;
+  text-wrap: balance;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.95), 0 0 14px rgba(0, 0, 0, 0.8);
+}
+.game-root .end-buttons {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ------------------------------------------------------------------ fatal -- */
+.game-root .overlay--fatal { background: #0b0303; z-index: 50; }
+.game-root .overlay--fatal pre {
+  position: relative;
+  z-index: 4;
+  max-width: 80vw;
+  white-space: pre-wrap;
+  color: #b06a55;
+  font-size: 0.8rem;
+}
+
+/* -------------------------------------------------------------- the loop -- */
+/*
+   Reaching the exit does not end the game — it starts the next maze. This is the
+   layer that covers the handover: a black fill whose opacity the GAME drives
+   frame by frame, and the card that sits on it while the world is rebuilt.
+
+   There is deliberately no `transition` on the opacity. The timing belongs to
+   `updateLoop` in game.ts, which already knows exactly how far through each beat
+   it is; a CSS transition here would be a second clock racing the first, and
+   under the capture harness's 4-17fps the two would visibly disagree. This is
+   the same reasoning that moved the game-over beat's timing into a single owner.
+*/
+.game-root .overlay--loop {
+  /* Not pure black. The maze's darkness is a very slightly warm near-black, and
+     a true #000 fade reads as the monitor switching off rather than as the light
+     going out of a place. */
+  background: #030102;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Above the HUD but below the fatal overlay, and it must never eat a click:
+     `pointer-events` is also set inline, because this element covers the canvas
+     for nine seconds and the click that re-acquires pointer lock afterwards has
+     to reach it. */
+  pointer-events: none;
+}
+
+/*
+   SUPPRESS THE SHARED VIGNETTE ON THIS ONE OVERLAY.
+
+   `.overlay::before` lays a radial gradient reaching rgba(0,0,0,0.82) over every
+   overlay in the game, which is right for a panel floating over a lit maze and
+   wrong here: this overlay IS the black, so the vignette only subtracts from the
+   one thing on it. Measured on the first capture — the card rendered, and both
+   the title and the body were so far down that reading them off the frame took
+   deliberate effort, which for the single most important line of text in the
+   game is a failure.
+*/
+.game-root .overlay--loop::before { display: none; }
+
+.game-root .loop-card {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  text-align: center;
+  padding: 0 2rem;
+  /* A PLAIN FADE. It used to rise 14px and close its letter-spacing from 0.5em,
+     which is a motion-graphics entrance — letters springing together under a
+     slide-up reads as a title card in an advert, and the user's note was exactly
+     that: it "gets animated in in a lighthearted way". Movement implies a
+     presenter. These lines are the game telling you that you did not escape, and
+     the right delivery is for them to simply BE there, resolving out of the
+     black with no gesture attached.
+
+     The timing survives the change and its reasoning still holds. 0.9s, not the
+     1.5s first tried: `cardSeconds` is 4.4, so a 1.5s entry spent a third of the
+     beat below full opacity, and a capture landing anywhere in that third
+     photographed text too faint to read — a real player-facing problem, not just
+     a harness one, since these are the user's own lines and they get four
+     seconds to be read.
+
+     `ease-in` rather than the old `ease-out`: the text now holds near-invisible
+     a moment longer and then settles, instead of arriving fast and easing to a
+     stop. Slower to commit is colder. */
+  animation: gr-loopcard 0.9s ease-in both;
+}
+
+@keyframes gr-loopcard {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* The first loop's headline is the real victory screen, verbatim, because the
+   shock only works if the player believed it. Matched to `.end-window h2` on
+   purpose: it must be the same object they would have got before. */
+.game-root .loop-title {
+  margin: 0;
+  font-size: clamp(1.4rem, 4vw, 2.3rem);
+  letter-spacing: 0.34em;
+  text-indent: 0.34em;
+  font-weight: 400;
+  font-family: 'Georgia', 'Times New Roman', serif;
+  /* Lifted off `--ember` (#c8330f). The end-window's ember works because it sits
+     on a lit plank over a lit maze; on a pure black field the same value measured
+     as barely-readable in the first capture. This is the same hue held at a
+     higher value, so it still belongs to the palette. */
+  color: #e85a30;
+  text-shadow: 0 0 34px rgba(200, 51, 15, 0.55), 0 0 90px rgba(200, 51, 15, 0.25);
+}
+
+/* From loop 2 the headline is replaced by the count. Large, plain, and the only
+   thing on screen — by this point the number IS the horror, and dressing it up
+   would soften it. */
+.game-root .loop-depth {
+  font-family: 'Georgia', 'Times New Roman', serif;
+  font-size: clamp(0.85rem, 2vw, 1.05rem);
+  letter-spacing: 0.42em;
+  text-indent: 0.42em;
+  text-transform: uppercase;
+  color: rgba(179, 165, 151, 0.72);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+}
+.game-root .loop-depth span {
+  display: block;
+  font-size: clamp(3.2rem, 12vw, 6.4rem);
+  letter-spacing: 0;
+  text-indent: 0;
+  line-height: 1;
+  /* Same lift as `.loop-title`, and for the same measured reason. */
+  color: #e85a30;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 48px rgba(200, 51, 15, 0.5), 0 0 110px rgba(200, 51, 15, 0.22);
+}
+
+.game-root .loop-sub {
+  margin: 0;
+  font-style: italic;
+  /* 0.95rem at #b3a597 measured as legible only on inspection against black.
+     These are the user's own lines and they have to be READ, not glimpsed. */
+  font-size: 1.05rem;
+  color: #d9cec3;
+  max-width: 44ch;
+  line-height: 1.7;
+  text-wrap: balance;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.95);
+}
+.game-root .loop-sub--short { opacity: 0.85; }
+
+/* The depth counter on the HUD. Same scratched-tally register as the gem count
+   beside it — one line, no colour of its own, no box. It is a fact the player is
+   allowed to check, not a notification. It does not exist at depth 1; see the
+   note in GameCanvas.tsx for why that matters. */
+.game-root .hud-depth {
+  font-size: 0.78rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(214, 204, 194, 0.5);
+  line-height: 1;
+  padding-bottom: 4px;
+  /* Set off from the gem count by a rule rather than by a gap, so the two read
+     as one instrument with two fields instead of as two separate widgets. */
+  margin-left: 0.7rem;
+  padding-left: 0.8rem;
+  border-left: 1px solid rgba(214, 204, 194, 0.18);
+  text-shadow: 0 0 10px rgba(0, 0, 0, 0.95), 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+.game-root .hud-depth b {
+  font-weight: 400;
+  font-size: 1.05rem;
+  color: rgba(214, 204, 194, 0.9);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Respect a user who has asked the OS to stop moving things. The grain and the
+   breathing vignette are exactly the kind of thing that setting exists for. */
+@media (prefers-reduced-motion: reduce) {
+  .game-root .grain::after,
+  .game-root .overlay::after,
+  .game-root .overlay::before,
+  .game-root .title span,
+  .game-root .loading-plate,
+  .game-root .loading-plate::after,
+  .game-root .menu-bg,
+  .game-root .end-field,
+  .game-root .hud-lockhint {
+    animation: none;
+  }
+  /* The staged assembly of the loading card is a motion effect, but removing it
+     outright would leave every element at `opacity: 0` — `gr-loadrise` is an
+     `both`-filled animation and its from-state is the element's only opacity.
+     So these get an instant no-op keyframe rather than `animation: none`. */
+  .game-root .loading-eyebrow,
+  .game-root .loading-title,
+  .game-root .loading-rule,
+  .game-root .loading-epigraph,
+  .game-root .loading-meter {
+    animation: gr-loadrise 0.01s linear both;
+  }
+  /* Same trap: `gr-loopcard` is `both`-filled and its from-state carries the
+     card's only opacity, so `animation: none` here would leave the transition
+     card permanently invisible — the player would sit through four seconds of a
+     black screen with nothing on it and no way to know why. Collapse the
+     animation instead of removing it. */
+  .game-root .loop-card {
+    animation: gr-loopcard 0.01s linear both;
+  }
+}
+
+/* ------------------------------------------------------ IDENTITY & BOARD --
+   Memphis sign-in, the username field and the scoreboard.
+
+   These share the menu's language deliberately: the same scratched-parchment
+   palette as `.controls`, the same `.btn--ghost` for actions, no panel
+   chrome of their own. The scaffold that `thebes-deploy add auth` generates
+   uses a generic `.panel` card, which reads as a settings dialog dropped into
+   a horror menu — the mechanism was right and the dressing was not.
+
+   Nothing here is ever placed in front of Descend. Anonymous play works; the
+   identity only decides whether the descent gets counted. */
+.game-root .auth {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid rgba(140, 98, 62, 0.16);
+  font-size: 0.62rem;
+  color: #8a7d70;
+}
+.game-root .auth-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.game-root .auth-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.45);
+  border: none;
+  border-radius: 2px;
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  font-size: 0.68rem;
+  color: #c4b6a6;
+  letter-spacing: 0.02em;
+  box-shadow:
+    inset 0 1px 4px rgba(0, 0, 0, 0.85),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+.game-root .auth-input::placeholder { color: #5c5249; }
+.game-root .auth-input:focus {
+  outline: none;
+  box-shadow:
+    inset 0 1px 4px rgba(0, 0, 0, 0.85),
+    inset 0 0 0 1px rgba(150, 104, 62, 0.4);
+}
+.game-root .auth .btn--ghost {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.66rem;
+}
+.game-root .auth-who { margin: 0; color: #a2948a; }
+.game-root .auth-who strong { color: #c8a271; font-weight: 600; }
+.game-root .auth-label {
+  color: #5c5249;
+  margin-right: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.55rem;
+}
+.game-root .auth-hint { margin: 0; color: #5c5249; line-height: 1.45; }
+.game-root .auth-error { margin: 0; color: #b4553f; }
+/* Sign-out is a link, not a button: it must not compete with Descend. */
+.game-root .auth-out {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.58rem;
+  color: #5c5249;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.game-root .auth-out:hover:not(:disabled) { color: #8a7d70; }
+.game-root .auth-out:disabled { cursor: default; opacity: 0.6; }
+
+/* ------------------------------------------------------------ SCOREBOARD --
+   A MODAL, centred, over a darkened world.
+
+   It used to live inline above the menu plank and the user's report was three
+   faults in one line: "small, hidden behind the menu, and the 1layer6 at the
+   top right is useless". All three had the same cause — a leaderboard does not
+   fit in a 25rem column already carrying a tagline, a button, a control legend
+   and a sign-in form, and the plank's ornate frame overlapped what was left.
+   Given room, the columns can be labelled and the numbers can breathe. */
+.game-root .board-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  /* The darkening the user asked for. Heavy enough that the eye behind it stops
+     competing for attention, and blurred so the board is unambiguously the
+     subject rather than one more layer in a busy frame. */
+  background: rgba(3, 2, 2, 0.82);
+  backdrop-filter: blur(3px);
+  pointer-events: auto;
+  animation: gr-boardin 0.22s ease-out both;
+}
+@keyframes gr-boardin { from { opacity: 0; } to { opacity: 1; } }
+
+.game-root .board-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  width: min(34rem, 92vw);
+  /* Bounded so a full board scrolls INSIDE the panel rather than growing off
+     the screen — the user asked for scrollable, and a modal taller than the
+     viewport is how a "Close" button ends up unreachable. */
+  max-height: min(30rem, 82vh);
+  padding: 1.4rem 1.6rem 1.2rem;
+  box-sizing: border-box;
+  color: #8a7d70;
+  font-size: 0.72rem;
+}
+.game-root .board-head {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.26em;
+  text-indent: 0.26em;
+  text-align: center;
+  color: #c8a271;
+}
+.game-root .board-empty { margin: 0; color: #5c5249; font-style: italic; text-align: center; }
+
+.game-root .board-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0.2rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  /* THE SCROLL. `min-height: 0` is load-bearing: without it a flex child
+     refuses to shrink below its content, so the list pushes the panel — and the
+     Close button with it — past the bottom of the screen instead of scrolling. */
+  overflow-y: auto;
+  min-height: 0;
+}
+.game-root .board-list::-webkit-scrollbar { width: 6px; }
+.game-root .board-list::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.3); }
+.game-root .board-list::-webkit-scrollbar-thumb {
+  background: rgba(140, 98, 62, 0.35);
+  border-radius: 3px;
+}
+
+.game-root .board-row {
+  display: grid;
+  grid-template-columns: 1.6rem 1fr 4.5rem 3rem;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.26rem 0.3rem;
+}
+/* Labelled columns, which the inline version had no width for — leaving two
+   unexplained numbers jammed against the right edge. */
+.game-root .board-row--head {
+  font-size: 0.55rem;
+  letter-spacing: 0.16em;
+  color: #5c5249;
+  border-bottom: 1px solid rgba(140, 98, 62, 0.2);
+  padding-bottom: 0.35rem;
+  margin-bottom: 0.15rem;
+}
+.game-root .board-row--head .board-depth,
+.game-root .board-row--head .board-gems { color: #5c5249; }
+.game-root .board-row.is-you { background: rgba(140, 98, 62, 0.1); border-radius: 2px; }
+.game-root .board-rank { color: #5c5249; text-align: right; }
+.game-root .board-name {
+  color: #a2948a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-root .board-depth { color: #8a7d70; text-align: right; }
+.game-root .board-depth b { color: #c8a271; font-weight: 600; font-size: 0.86rem; }
+/* Gems are the tiebreak, so present but subordinate — the eye should land on
+   the depth column first. */
+.game-root .board-gems { color: #5c5249; text-align: right; }
+
+.game-root .board-mine {
+  margin: 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(140, 98, 62, 0.16);
+  text-align: center;
+  color: #8a7d70;
+}
+.game-root .board-mine b { color: #c8a271; font-weight: 600; }
+.game-root .board-note {
+  margin: 0;
+  text-align: center;
+  font-style: italic;
+  font-size: 0.62rem;
+  color: #5c5249;
+}
+.game-root .board-close { align-self: center; margin-top: 0.2rem; }
+/* Full width in the plank, sitting under the auth block. */
+.game-root .menu-board-btn { width: 100%; margin-top: 0.5rem; }
+
+/* -------------------------------------------------------- TOUCH CONTROLS --
+   Left analog stick, sprint button, swipe anywhere else to look.
+
+   `touch-action: none` on every interactive surface is not optional: without it
+   the browser claims the gesture first and the game receives a scroll, a
+   pull-to-refresh or a pinch-zoom instead of a swipe. It is the single most
+   common reason a touch game "does nothing" on a phone. */
+.game-root .touch {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  pointer-events: none;
+  touch-action: none;
+}
+/* The look surface is the whole screen, UNDER the two controls, so "swipe
+   anywhere else" is literal — anywhere the controls are not. */
+.game-root .touch-look {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.game-root .touch-stick {
+  position: absolute;
+  left: max(1.1rem, env(safe-area-inset-left));
+  bottom: max(1.1rem, env(safe-area-inset-bottom));
+  width: 9.5rem;
+  height: 9.5rem;
+  pointer-events: auto;
+  touch-action: none;
+  display: grid;
+  place-items: center;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Quiet, but FINDABLE. It is a horror game and this is scaffolding on the
+   player's own eye, so it must not become the brightest thing on a dark screen —
+   but the first pass went too far the other way: legible on a black capture and
+   easy to lose on a real phone in a lit room. Lifted ~70% on the borders and
+   backgrounds, still well below the HUD's own ink. */
+.game-root .touch-stick-well {
+  position: absolute;
+  width: 7rem;
+  height: 7rem;
+  border-radius: 50%;
+  border: 1px solid rgba(196, 136, 84, 0.28);
+  background: radial-gradient(circle, rgba(9, 5, 4, 0.55) 0%, rgba(9, 5, 4, 0.2) 70%, transparent 100%);
+}
+.game-root .touch-stick-knob {
+  position: absolute;
+  width: 3.1rem;
+  height: 3.1rem;
+  border-radius: 50%;
+  border: 1px solid rgba(196, 136, 84, 0.45);
+  background: rgba(38, 23, 15, 0.68);
+  box-shadow: inset 0 1px 6px rgba(0, 0, 0, 0.8);
+  /* No transition: a knob that eases toward the thumb feels like input lag,
+     because it IS input lag made visible. It must be exactly under the finger. */
+}
+
+.game-root .touch-sprint {
+  position: absolute;
+  right: max(1.4rem, env(safe-area-inset-right));
+  bottom: max(2.2rem, env(safe-area-inset-bottom));
+  width: 5.2rem;
+  height: 5.2rem;
+  border-radius: 50%;
+  pointer-events: auto;
+  touch-action: none;
+  border: 1px solid rgba(196, 136, 84, 0.34);
+  background: rgba(9, 5, 4, 0.55);
+  color: #a2948a;
+  font: inherit;
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  text-indent: 0.18em;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.game-root .touch-sprint.is-on {
+  color: #c8a271;
+  border-color: rgba(196, 136, 84, 0.5);
+  background: rgba(40, 22, 14, 0.6);
+}
+
+/* ------------------------------------------------------------- MOBILE UI --
+   The menu was laid out for a wide desktop frame: a title in the top-right
+   corner, a 30%-wide plank bottom-left, and the eye given the whole middle. On
+   a phone that column is narrower than its own control legend, and in portrait
+   the title and the plank overlap.
+
+   Rather than scale everything down — which makes 0.55rem text unreadable — the
+   layout is rebuilt for the narrow case: the plank goes full width at the
+   bottom, and the title moves to the top and centres over it. */
+@media (max-width: 780px), (orientation: portrait) and (max-width: 1024px) {
+  .game-root .menu-inner > .title {
+    position: absolute;
+    top: max(1.2rem, env(safe-area-inset-top));
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(92vw, 26rem);
+    padding: 0.7rem 0.9rem 0.8rem;
+    font-size: clamp(1rem, 5.4vw, 1.6rem);
+  }
+  .game-root .menu-inner > .menu-left {
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: max(1rem, env(safe-area-inset-bottom));
+    width: min(92vw, 26rem);
+  }
+  .game-root .menu-plank { padding: 0.8rem 1rem 0.75rem; }
+  /* The legend is `nowrap` on desktop to keep the plank short; on a narrow
+     screen that forces a horizontal overflow, so it is allowed to wrap here. */
+  .game-root .menu-plank .controls {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem 0.85rem;
+  }
+  /* Touch targets. 44px is the smallest reliably hittable control. */
+  .game-root .btn { min-height: 2.75rem; }
+  .game-root .auth-input { min-height: 2.5rem; font-size: 0.8rem; }
+  .game-root .auth .btn--ghost { min-height: 2.5rem; }
+  .game-root .board-panel { width: 94vw; max-height: 80vh; padding: 1.1rem 1rem 1rem; }
+  .game-root .board-row { grid-template-columns: 1.4rem 1fr 3.6rem 2.4rem; gap: 0.4rem; }
+}
+
+/* Landscape phones are SHORT, not narrow: the constraint is height, and a menu
+   sized by viewport width overflows the bottom of the screen. */
+@media (orientation: landscape) and (max-height: 480px) {
+  .game-root .menu-inner > .title {
+    top: max(0.6rem, env(safe-area-inset-top));
+    padding: 0.4rem 0.8rem 0.5rem;
+    font-size: clamp(0.85rem, 3.4vh, 1.2rem);
+  }
+  .game-root .menu-inner > .menu-left { bottom: 0.6rem; width: min(70vw, 26rem); }
+  .game-root .menu-plank { gap: 0.35rem; padding: 0.5rem 0.9rem 0.5rem; }
+  .game-root .menu-plank .tagline { font-size: 0.66rem; }
+  .game-root .board-panel { max-height: 88vh; }
+  /* The stick and the sprint button shrink so they do not eat a short screen. */
+  .game-root .touch-stick { width: 8rem; height: 8rem; }
+  .game-root .touch-stick-well { width: 6rem; height: 6rem; }
+  .game-root .touch-sprint { width: 4.4rem; height: 4.4rem; }
+}
+
+/* ------------------------------------------------------- MOBILE HUD/PAUSE --
+   Two placement problems that only exist once there are thumbs on the screen. */
+
+/* THE GEM COUNTER MOVES TO THE TOP LEFT ON TOUCH.
+   It lives bottom-left on desktop, which is exactly where the analog stick and
+   the player's left thumb now are — the count was under the hand holding the
+   phone. Only the touch layout moves; the desktop placement was tuned with the
+   user and there is no thumb there to dodge. */
+.game-root .hud--touch .hud-gems {
+  bottom: auto;
+  top: max(0.9rem, env(safe-area-inset-top));
+  left: max(0.9rem, env(safe-area-inset-left));
+  align-items: center;
+}
+/* The depth line rides along with it. */
+.game-root .hud--touch .hud-depth { align-self: center; }
+
+.game-root .touch-pause {
+  position: absolute;
+  z-index: 26;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: max(0.75rem, env(safe-area-inset-right));
+  width: 2.9rem;
+  height: 2.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.28rem;
+  border-radius: 50%;
+  border: 1px solid rgba(196, 136, 84, 0.34);
+  background: rgba(9, 5, 4, 0.55);
+  /* The look surface sits under this at z 25 and swallows drags; the button
+     needs its own events or a tap would turn the camera instead of pausing. */
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+/* Two bars — a pause glyph, drawn rather than typed, so it needs no icon font
+   and cannot be turned into an emoji by a mobile browser. */
+.game-root .touch-pause span {
+  display: block;
+  width: 0.2rem;
+  height: 0.95rem;
+  background: #a2948a;
+  border-radius: 1px;
+}
+.game-root .touch-pause:active { background: rgba(40, 22, 14, 0.7); }
