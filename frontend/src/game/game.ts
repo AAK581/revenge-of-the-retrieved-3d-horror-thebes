@@ -13,6 +13,10 @@ import { Maze, mulberry32 } from './maze';
 import { buildWorld, applyElevationFog, type WorldBuild } from './world';
 import { buildPost, type PostChain } from './post';
 import { Player } from './player';
+import { VrRig, type VrMove } from './vr';
+import { installVrGrade } from './vrgrade';
+import { UILayer } from './vrui';
+import * as vrscreens from './vrscreens';
 import { Monster } from './monster';
 import { AudioEngine } from './audio';
 
@@ -647,6 +651,12 @@ export class Game {
     // a three ShaderChunk, and a material that compiled first would keep the
     // unpatched falloff and blow its highlights while its neighbours did not.
     installNearFieldFloor(CFG.flashlight.nearFloor, CFG.flashlight.nearFloorPower);
+    // Same reasoning, same window: this rewrites the tonemapping chunk, and a
+    // material that compiled first would keep three's stub `CustomToneMapping`
+    // (which returns the colour unchanged) and render ungraded in VR while its
+    // neighbours graded correctly. Installing the chunk does not ENABLE it —
+    // `setVrGrade` does that, on session entry only.
+    installVrGrade();
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
@@ -711,6 +721,9 @@ export class Game {
     // call keeps three's flat fog. Nothing is added after this call.
     applyElevationFog(this.scene);
     this.post = buildPost(this.renderer, this.scene, this.camera, CFG.render.post);
+    this.vr = new VrRig(this.renderer, this.camera, this.player);
+    this.vr.onEnd = () => this.syncVrScreens();
+    this.initVrUiPreview();
     this.onResize();
 
     this.events.onLoadProgress(0.85, 'Tuning the silence');
@@ -1803,6 +1816,248 @@ export class Game {
     this.setPhase('playing');
   }
 
+  // ---- VR -------------------------------------------------------------------
+
+  private vr: VrRig | null = null;
+  private vrMove: VrMove = { forward: 0, strafe: 0, sprint: false };
+  private vrTriggerWas = false;
+
+  static vrSupported() { return VrRig.isSupported(); }
+  get vrActive() { return !!this.vr?.active; }
+
+  /**
+   * Enter immersive VR.
+   *
+   * Called from the flat page, and that is not a limitation to route around:
+   * passkey sign-in is a browser-mediated WebAuthn ceremony whose prompt, on
+   * tethered PC VR, is a desktop OS modal with no representation inside the
+   * headset. Sign in flat, then put the headset on. Everything after this point
+   * is in-world.
+   */
+  async enterVR() {
+    if (!this.vr) return false;
+    const ok = await this.vr.enter();
+    if (ok) {
+      // The UI layer is the only menu surface once the DOM is invisible.
+      if (!this.ui) this.ui = new UILayer();
+      this.wireVrUiSelect();
+      this.syncVrScreens();
+    }
+    return ok;
+  }
+
+  async exitVR() { await this.vr?.exit(); }
+
+  /**
+   * Map game phase onto the in-world panel that should be showing.
+   *
+   * The DOM overlays keep doing their job on the flat page; this is their
+   * counterpart for a head that cannot see the DOM. Sign-in is absent by design.
+   */
+  private syncVrScreens() {
+    if (!this.ui || !this.vr?.active) return;
+    this.uiState.gemsGot = this.gemsCollected;
+    this.uiState.gemsTotal = this.gems.length;
+    this.uiState.depth = this.depth;
+
+    const screen: vrscreens.ScreenName | null =
+      this.phase === 'menu' ? 'menu'
+      : this.phase === 'caught' || this.phase === 'gameover' ? 'death'
+      : this.phase === 'transition' ? 'loop'
+      : this.phase === 'playing' ? (this.paused ? 'pause' : 'hud')
+      : null;
+
+    if (screen === null) { this.ui.clear(); return; }
+    if (screen === this.uiScreen && this.ui.panels.length) return;
+    this.setVrUiScreen(screen);
+  }
+
+  private wireVrUiSelect() {
+    if (!this.ui) return;
+    this.ui.onSelect = (id) => {
+      if (id === 'descend') { this.beginPlay(); this.syncVrScreens(); }
+      if (id === 'resume') { this.setPaused(false); this.syncVrScreens(); }
+      if (id === 'board') this.setVrUiScreen('board');
+      if (id === 'close') this.syncVrScreens();
+    };
+    this.ui.onSlide = (id, v) => {
+      if (id === 'volume') { this.uiState.volume = v; this.setMasterVolume(v); }
+      if (id === 'look') this.uiState.lookSensitivity = v;
+      this.setVrUiScreen(this.uiScreen);
+    };
+  }
+
+  /**
+   * Per-frame VR work: locomotion, then the pointer.
+   *
+   * The pointer is driven from the controller's target-ray space and the trigger
+   * is edge-detected here rather than through a `selectstart` listener, so press
+   * and release resolve against the SAME frame's ray. A listener fires between
+   * frames, which is how a laser UI ends up selecting whatever the ray crossed
+   * on the frame the event happened to land.
+   */
+  private updateVr(dt: number) {
+    if (!this.vr?.active) { this.vrMove = { forward: 0, strafe: 0, sprint: false }; return; }
+    this.vrMove = this.vr.update(dt);
+
+    if (!this.ui) return;
+    this.placeVrPanels();
+    const ray = this.vr.pointerRay();
+    if (ray) {
+      this.ui.setRay(ray.origin, ray.direction);
+      this.ui.update();
+    }
+    const held = this.vr.triggerHeld();
+    if (held && !this.vrTriggerWas) this.ui.press();
+    if (!held && this.vrTriggerWas) this.ui.release();
+    this.vrTriggerWas = held;
+  }
+
+  /**
+   * Panels are BODY-locked, not head-locked.
+   *
+   * A menu welded to the face cannot be looked away from and is deeply
+   * unpleasant; anchoring to the body's heading lets the player glance around a
+   * panel that stays put. **This is the placement decision that most needs a
+   * headset to confirm** — it is a considered default, not a verified one.
+   */
+  private placeVrPanels() {
+    if (!this.ui) return;
+    const yaw = this.player.yawObject.rotation.y;
+    const head = new THREE.Vector3();
+    this.camera.getWorldPosition(head);
+    const off = vrscreens.screenOffset(this.uiScreen);
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+    for (const p of this.ui.panels) {
+      p.mesh.position.copy(head)
+        .addScaledVector(fwd, this.uiDistance)
+        .addScaledVector(right, off.x);
+      p.mesh.position.y = head.y + off.y;
+      p.mesh.quaternion.copy(q);
+      p.mesh.updateMatrixWorld(true);
+    }
+  }
+
+  // ---- in-world UI preview --------------------------------------------------
+
+  /**
+   * `?vrui=1` — mount the in-world panels in the running game and drive them with
+   * the mouse.
+   *
+   * This exists so the VR menus can be reviewed a week before a headset arrives,
+   * and it is not a mock-up of them: `UILayer` takes a world-space ray, so the
+   * mouse here and a controller later feed the identical code path. What you see
+   * is the real panel, at a real distance, against the real corridor with the real
+   * grade pass behind it.
+   *
+   * It owns its own listeners rather than routing through `GameCanvas.tsx`,
+   * because the shipped component deals in pointer-lock deltas and this needs
+   * absolute positions. A dev flag should not reshape the input path of the game
+   * it is inspecting.
+   *
+   * Keys 1-6 cycle screens. Sign-in is deliberately absent — WebAuthn cannot
+   * render inside an immersive session, so it stays on the flat page.
+   */
+  private ui: UILayer | null = null;
+  private uiState = vrscreens.defaultState();
+  private uiScreen: vrscreens.ScreenName = 'menu';
+  private uiDistance = vrscreens.SCREEN_DISTANCE;
+  private uiNdc = new THREE.Vector2(0, 0);
+  private uiCleanup: (() => void) | null = null;
+
+  private initVrUiPreview() {
+    if (new URLSearchParams(location.search).get('vrui') !== '1') return;
+
+    this.ui = new UILayer();
+    // Populate with something worth looking at: an empty board and a depth of 1
+    // are the least informative states either screen has.
+    this.uiState.scores = Array.from({ length: 6 }, (_, i) => ({
+      rank: i + 1, name: `player${i}.thebes`, depth: 22 - i * 3, gems: 5 - (i % 3), you: i === 2,
+    }));
+    this.uiState.depth = 7;
+    this.uiState.gemsGot = 2;
+    this.setVrUiScreen('menu');
+
+    const canvas = this.renderer.domElement;
+    const onMove = (e: MouseEvent) => {
+      const r = canvas.getBoundingClientRect();
+      this.uiNdc.set(
+        ((e.clientX - r.left) / r.width) * 2 - 1,
+        -((e.clientY - r.top) / r.height) * 2 + 1,
+      );
+    };
+    const onDown = () => this.ui?.press();
+    const onUp = () => this.ui?.release();
+    const onKey = (e: KeyboardEvent) => {
+      const order: vrscreens.ScreenName[] = ['menu', 'pause', 'board', 'death', 'loop', 'hud'];
+      const i = Number(e.key) - 1;
+      if (i >= 0 && i < order.length) this.setVrUiScreen(order[i]);
+    };
+    canvas.addEventListener('mousemove', onMove);
+    canvas.addEventListener('mousedown', onDown);
+    canvas.addEventListener('mouseup', onUp);
+    window.addEventListener('keydown', onKey);
+    this.uiCleanup = () => {
+      canvas.removeEventListener('mousemove', onMove);
+      canvas.removeEventListener('mousedown', onDown);
+      canvas.removeEventListener('mouseup', onUp);
+      window.removeEventListener('keydown', onKey);
+    };
+
+    this.ui.onSelect = (id) => {
+      // eslint-disable-next-line no-console
+      console.log(`[vrui] select: ${id}`);
+      if (id === 'board') this.setVrUiScreen('board');
+      if (id === 'close' || id === 'resume') this.setVrUiScreen('menu');
+    };
+    this.ui.onSlide = (id, v) => {
+      if (id === 'look') this.uiState.lookSensitivity = v;
+      if (id === 'volume') this.uiState.volume = v;
+      this.setVrUiScreen(this.uiScreen);
+    };
+  }
+
+  private setVrUiScreen(name: vrscreens.ScreenName) {
+    if (!this.ui) return;
+    this.ui.clear();
+    this.uiScreen = name;
+    this.uiDistance = name === 'board' ? vrscreens.BOARD_DISTANCE : vrscreens.SCREEN_DISTANCE;
+    this.ui.add(vrscreens.buildScreen(name, this.uiState));
+  }
+
+  /**
+   * Park the panel in front of the eye each frame.
+   *
+   * Body-locked rather than head-locked would be the right answer in VR — a panel
+   * welded to your face is uncomfortable and cannot be looked away from. This
+   * preview head-locks it deliberately so a mouse can always reach it; **placement
+   * is one of the things marked as unjudgeable without a headset**, so nothing
+   * here should be read as the shipping behaviour.
+   */
+  private updateVrUiPreview() {
+    if (!this.ui) return;
+    this.camera.updateWorldMatrix(true, false);
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    this.camera.matrixWorld.decompose(pos, quat, new THREE.Vector3());
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quat);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quat);
+    const off = vrscreens.screenOffset(this.uiScreen);
+    for (const p of this.ui.panels) {
+      p.mesh.position.copy(pos)
+        .addScaledVector(fwd, this.uiDistance)
+        .addScaledVector(right, off.x)
+        .addScaledVector(up, off.y);
+      p.mesh.quaternion.copy(quat);
+      p.mesh.updateMatrixWorld(true);
+    }
+    this.ui.rayFromMouse(this.uiNdc.x, this.uiNdc.y, this.camera);
+    this.ui.update();
+  }
+
   // ---- input ---------------------------------------------------------------
 
   handleKey(code: string, down: boolean) {
@@ -2065,11 +2320,39 @@ export class Game {
     // walls away while the beam, correctly, stayed calm.
     const dread = this.phase === 'playing' ? this.dreadPressure : 0;
 
-    if (this.post?.enabled) {
+    this.updateVr(frameDt);
+
+    /**
+     * Post is BYPASSED in VR until the chain is eye-aware.
+     *
+     * `post.ts` renders the scene to its own full-screen target and composites it
+     * with a fullscreen triangle. Under WebXR three renders both eyes into the
+     * session's framebuffer with per-eye viewports, and a chain that owns its own
+     * target and knows nothing about viewports produces one eye's image stretched
+     * across both — which is not a degraded picture, it is a broken stereo pair
+     * and genuinely unpleasant to look at. Bypassing loses the grade, which is a
+     * real loss of atmosphere; shipping a broken stereo pair loses the player.
+     */
+    if (this.post?.enabled && !this.vr?.active) {
       this.post.update(elapsed, dread);
       this.post.render();
     } else {
       this.renderer.render(this.scene, this.camera);
+    }
+
+    /**
+     * In-world UI, composited LAST and over the finished frame.
+     *
+     * It has to be after the grade pass, not inside the scene. Everything post
+     * does — 0.50 desaturation, a 0.66 drain out of the shadow band, the log tone
+     * curve, the vignette — is authored for masonry being raked by a torch, and a
+     * menu run through it comes out muddy brown with its corners eaten. The DOM
+     * overlays this replaces have always been composited on top of the frame; this
+     * keeps that true once they are geometry.
+     */
+    if (this.ui) {
+      this.updateVrUiPreview();
+      this.ui.render(this.renderer, this.camera);
     }
 
     this.frames++;
@@ -2296,18 +2579,29 @@ export class Game {
     // Run the follow FIRST: it returns the stick's contribution re-expressed in
     // the camera frame it has just rotated, so movement and view stay consistent
     // within one frame rather than lagging each other by one.
-    const touch = this.updateLookFollow(dt);
+    /**
+     * The look-follow is a TOUCH affordance and must not run in VR.
+     *
+     * It eases the camera toward the stick's heading, which on a phone is what
+     * makes one-thumb movement possible. In a headset the camera is the player's
+     * head: turning it for them is the one rotation with no physical counterpart
+     * at all, and it would fight every glance they take. VR movement arrives
+     * already resolved against head yaw by `VrRig.update`.
+     */
+    const touch = this.vr?.active ? { forward: 0, strafe: 0 } : this.updateLookFollow(dt);
+    const vrMove = this.vrMove;
     const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
     const input = {
       forward: clamp1(
         (this.keys.has('KeyW') || this.keys.has('ArrowUp') ? 1 : 0) -
-        (this.keys.has('KeyS') || this.keys.has('ArrowDown') ? 1 : 0) + touch.forward,
+        (this.keys.has('KeyS') || this.keys.has('ArrowDown') ? 1 : 0) + touch.forward + vrMove.forward,
       ),
       strafe: clamp1(
         (this.keys.has('KeyD') || this.keys.has('ArrowRight') ? 1 : 0) -
-        (this.keys.has('KeyA') || this.keys.has('ArrowLeft') ? 1 : 0) + touch.strafe,
+        (this.keys.has('KeyA') || this.keys.has('ArrowLeft') ? 1 : 0) + touch.strafe + vrMove.strafe,
       ),
-      sprint: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.touchMove.sprint,
+      sprint: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')
+        || this.touchMove.sprint || vrMove.sprint,
     };
 
     this.player.update(dt, input, this.world.colliders);
@@ -3780,12 +4074,23 @@ export class Game {
    */
   debugCameraTransform() {
     return {
-      x: this.camera.position.x,
-      y: this.camera.position.y,
       /**
-       * Mouse pitch lives on `player.pitchObject`; the camera is a CHILD of it
+       * The feel channels read off `player.feelObject`, NOT off the camera.
+       *
+       * They moved there when the rig gained a node for WebXR to write a head pose
+       * into, and this block has to move with them: the camera's local transform is
+       * now identity in flat play, so a reader left pointing at it would report a
+       * clean 0.000 for bob, nod, settle and roll forever. Every soak assertion on
+       * player feel would go on passing against a number that had stopped being
+       * connected to anything — which is the same failure the comment below already
+       * records once.
+       */
+      x: this.player.feelObject.position.x,
+      y: this.player.feelObject.position.y,
+      /**
+       * Mouse pitch lives on `player.pitchObject`; the feel node is a CHILD of it
        * and carries only the walk cycle's bob and foot-plant nod. This used to
-       * report `camera.rotation.x`, which is therefore ~0 forever even while
+       * report the camera's own rotation, which is therefore ~0 forever even while
        * vertical look works perfectly — a critic nearly failed the renderer on it
        * before proving with screenshots that looking up found the sky and looking
        * down found the floor. The diagnostic was lying, not the camera.
@@ -3794,8 +4099,8 @@ export class Game {
        * things: `pitch` is where you are aiming, `pitchBob` is the gait.
        */
       pitch: this.player.pitchObject.rotation.x,
-      pitchBob: this.camera.rotation.x,
-      roll: this.camera.rotation.z,
+      pitchBob: this.player.feelObject.rotation.x,
+      roll: this.player.feelObject.rotation.z,
       fov: this.camera.fov,
       yaw: this.player.yawObject.rotation.y,
       speed: this.player.speed,
@@ -4196,6 +4501,9 @@ export class Game {
   private setPhase(p: GamePhase) {
     this.phase = p;
     this.events.onPhase(p);
+    // The DOM overlays follow `onPhase`; in a headset nothing does unless this
+    // does. Cheap no-op when no session is running.
+    this.syncVrScreens();
   }
 
   get currentPhase() { return this.phase; }
@@ -4218,6 +4526,13 @@ export class Game {
     this.haloTex = null;
     this.wallTex?.dispose();
     this.wallTex = null;
+    // The preview owns DOM listeners and a canvas texture per panel. Both have to
+    // go on unmount or a remount stacks a second set of mouse handlers on the same
+    // canvas and leaks a texture per screen — which `loop-test.mjs` watches for.
+    this.uiCleanup?.();
+    this.uiCleanup = null;
+    this.ui?.clear();
+    this.ui = null;
     this.post?.dispose();
     this.renderer.dispose();
   }

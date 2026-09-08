@@ -2,10 +2,18 @@
  * First-person controller: movement, collision, head bob, camera sway, footsteps.
  *
  * The camera is deliberately not the thing that moves. A `yawObject` holds the
- * world position and heading; a `pitchObject` under it carries mouse pitch; the
- * camera hangs off that and only ever carries the bob/sway offset. That separation
- * is what lets the head swing hard during a sprint without the collision capsule
- * drifting a millimetre.
+ * world position and heading; a `pitchObject` under it carries mouse pitch; a
+ * `feelObject` under *that* carries the bob/sway offset. That separation is what
+ * lets the head swing hard during a sprint without the collision capsule drifting
+ * a millimetre.
+ *
+ * The camera itself is left at identity, and that is load-bearing rather than
+ * tidy. Under WebXR three's `WebXRManager` decomposes the headset pose straight
+ * onto `camera.position`/`camera.quaternion` every frame, so anything this file
+ * wrote there would be silently overwritten. Keeping the feel one node up means
+ * the same numbers compose with a tracked head instead of fighting it — and in VR
+ * the head feel is simply not committed, because procedural motion the player's
+ * inner ear did not ask for is the textbook way to make someone sick.
  *
  * ## The stride is one clock, not two
  *
@@ -70,7 +78,25 @@ const UP = new THREE.Vector3(0, 1, 0);
 export class Player {
   readonly yawObject = new THREE.Object3D();
   readonly pitchObject = new THREE.Object3D();
+  /**
+   * Carries every procedural offset the body produces: bob, breath, the foot-plant
+   * nod, the stop settle, camera roll and the sprint lean. Sits between the pitch
+   * node and the camera so the camera's own local transform stays free for a
+   * head-tracked pose to be written into.
+   */
+  readonly feelObject = new THREE.Object3D();
   readonly camera: THREE.PerspectiveCamera;
+
+  /**
+   * True while an immersive XR session owns the head.
+   *
+   * Gates three things that a headset supplies for real and must not be
+   * double-applied: the eye-height offset (a `local-floor` reference space already
+   * reports head height above the physical floor), mouse pitch, and the head feel.
+   * The torch keeps its full feel either way — the hand is allowed to bob, it is
+   * the *view* that must not.
+   */
+  private vr = false;
 
   velocity = new THREE.Vector3();
 
@@ -141,7 +167,8 @@ export class Player {
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
     this.yawObject.add(this.pitchObject);
-    this.pitchObject.add(camera);
+    this.pitchObject.add(this.feelObject);
+    this.feelObject.add(camera);
     this.pitchObject.position.y = CFG.player.eyeHeight;
     this.baseFov = camera.fov;
     this.fov = camera.fov;
@@ -206,11 +233,44 @@ export class Player {
     const p = CFG.player;
     const s = p.mouseSensitivity * (1 - this.sprintAmount * p.sprintLookPenalty);
     this.yawObject.rotation.y -= dx * s;
+    // Pitch is the headset's alone in VR. Turning the world under a player whose
+    // head is level is the one rotation that has no physical counterpart at all,
+    // so vertical look is simply not offered there; yaw survives because snap turn
+    // is discrete and lands before the inner ear has time to object.
+    if (this.vr) return;
     this.pitchObject.rotation.x -= dy * s;
     // Clamp just shy of straight up/down; letting it reach the pole flips the view.
     const limit = Math.PI / 2 - 0.02;
     this.pitchObject.rotation.x = Math.max(-limit, Math.min(limit, this.pitchObject.rotation.x));
   }
+
+  /**
+   * Hand the head to an immersive session, or take it back.
+   *
+   * The eye height is the subtle half. `pitchObject.position.y` lifts the camera to
+   * 1.68m because on a flat screen nothing else does — but a `local-floor` reference
+   * space already reports the headset's real height above the physical floor, so
+   * leaving the constant in stacks the two and puts the view at roughly 3.3m,
+   * looking down on a maze built for someone standing in it. It goes to zero for as
+   * long as the session owns the head, and comes back when it does not.
+   */
+  setVR(on: boolean) {
+    if (this.vr === on) return;
+    this.vr = on;
+    this.pitchObject.position.y = on ? 0 : CFG.player.eyeHeight;
+    this.pitchObject.rotation.x = 0;
+    this.feelObject.position.set(0, 0, 0);
+    this.feelObject.rotation.set(0, 0, 0);
+    if (!on) {
+      // Returning to flat: the camera carries whatever pose the headset last wrote.
+      this.camera.position.set(0, 0, 0);
+      this.camera.quaternion.identity();
+      this.camera.fov = this.baseFov;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  get isVR() { return this.vr; }
 
   update(dt: number, input: PlayerInput, colliders: Float32Array) {
     const p = CFG.player;
@@ -434,19 +494,36 @@ export class Player {
 
     const targetFov = this.baseFov + this.sprintAmount * p.sprintFovPush * Math.min(1, this.gait * 1.5);
     this.fov += (targetFov - this.fov) * Math.min(1, p.fovSmoothing * dt);
-    if (Math.abs(this.camera.fov - this.fov) > 0.01) {
+    // Never in VR. The projection comes from the headset's own per-eye frusta, so
+    // this would be overwritten anyway — but it is guarded rather than left to be
+    // ignored, because a field of view that widens when you sprint is one of the
+    // most reliable ways to induce sickness in a headset. The sprint tell in VR is
+    // the comfort tunnel closing in, not the frustum opening up.
+    if (!this.vr && Math.abs(this.camera.fov - this.fov) > 0.01) {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
 
     // --- commit -----------------------------------------------------------
-    this.camera.position.y = bobY + breathY + this.nod + this.settle;
-    this.camera.position.x = bobX + breathX;
-    // Pitch on the camera is purely feel; mouse pitch lives on pitchObject, so the
-    // two never contaminate each other and the aim clamp still holds.
-    this.camera.rotation.x = this.nod * p.nodToPitch + this.settle * p.settleToPitch
-      + breathPitch - this.lean;
-    this.camera.rotation.z = roll + breathRoll;
+    // Pitch here is purely feel; mouse pitch lives on pitchObject, so the two never
+    // contaminate each other and the aim clamp still holds.
+    //
+    // In VR none of it reaches the head. Bob, nod, settle and roll are all motion
+    // the eyes would report and the inner ear would not, which is the mismatch that
+    // makes people sick; the headset is the only thing allowed to move the view.
+    // The signals are still computed above — the torch reads them below, and the
+    // soak asserts on them through `nodDepth`/`settleDepth` — they simply are not
+    // committed to the transform.
+    if (this.vr) {
+      this.feelObject.position.set(0, 0, 0);
+      this.feelObject.rotation.set(0, 0, 0);
+    } else {
+      this.feelObject.position.y = bobY + breathY + this.nod + this.settle;
+      this.feelObject.position.x = bobX + breathX;
+      this.feelObject.rotation.x = this.nod * p.nodToPitch + this.settle * p.settleToPitch
+        + breathPitch - this.lean;
+      this.feelObject.rotation.z = roll + breathRoll;
+    }
 
     // The hand goes last, and is handed the *gait* components only — not the summed
     // camera offset, which also carries breath, nod and settle. Those three are

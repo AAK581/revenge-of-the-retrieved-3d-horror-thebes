@@ -33,6 +33,7 @@ import MemphisGate from '../MemphisGate';
 import Scoreboard from '../Scoreboard';
 import { startRun, reportGem, reportDescent, reportCapture, abandonRun, hasRun } from '../lib/scores';
 import TouchControls from './TouchControls';
+import * as vrgrade from './vrgrade';
 
 const ASSETS = 'assets/';
 
@@ -211,6 +212,32 @@ export default function GameCanvas() {
   const canFullscreen = typeof document !== 'undefined' &&
     (document.fullscreenEnabled ||
      !!(document as Document & { webkitFullscreenEnabled?: boolean }).webkitFullscreenEnabled);
+
+  /**
+   * Is there actually a headset? Asked once, asynchronously, and the button is
+   * withheld until the browser says yes — the same reasoning as `canFullscreen`
+   * above. Offering "Enter VR" on a machine with no runtime is offering something
+   * that can only produce an error dialog.
+   */
+  const [vrSupported, setVrSupported] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void Game.vrSupported().then((ok) => { if (alive) setVrSupported(ok); });
+    return () => { alive = false; };
+  }, []);
+
+  const enterVR = useCallback(async () => {
+    const game = gameRef.current;
+    if (!game) return;
+    try {
+      await game.enterVR();
+    } catch (err) {
+      // A refused or unavailable session is a normal outcome, not a crash: the
+      // headset may be asleep, in use, or the user may simply have dismissed the
+      // permission. Stay on the flat page and say so.
+      console.warn('[vr] session refused:', err);
+    }
+  }, []);
   /**
    * Does this device do touch at all? NOT "is this a phone" — the controls mount
    * wherever touch exists and are simply ignored by a player using a mouse,
@@ -464,6 +491,9 @@ export default function GameCanvas() {
      * every new question a critic wants to ask.
      */
     w.__GAME__ = game;
+    // Exposed for tools/beats/VRGRADE.json, which has to toggle the VR grade on
+    // a live renderer to compare it against the flat post path on the same frame.
+    w.__VRGRADE__ = vrgrade;
     // Lets the harness assert the UI layer's own state, not just the game's.
     w.__UI_STATE__ = () => ({
       phase: phaseRef.current,
@@ -901,6 +931,17 @@ export default function GameCanvas() {
                 {canFullscreen && (
                   <button className="btn btn--ghost menu-board-btn" onClick={() => void toggleFullscreen()}>
                     {isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                  </button>
+                )}
+                {/* Only rendered once the browser has confirmed an immersive-vr
+                    session is actually available, so a machine with no headset
+                    never shows a button that can only fail. Entry is HERE, on the
+                    flat page, because passkey sign-in is a WebAuthn ceremony whose
+                    prompt is a desktop OS modal with no representation inside a
+                    headset — sign in, then put it on. */}
+                {vrSupported && (
+                  <button className="btn btn--ghost menu-board-btn" onClick={() => void enterVR()}>
+                    Enter VR
                   </button>
                 )}
               </div>
