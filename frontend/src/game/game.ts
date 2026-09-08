@@ -1821,6 +1821,21 @@ export class Game {
   private vr: VrRig | null = null;
   private vrMove: VrMove = { forward: 0, strafe: 0, sprint: false };
   private vrTriggerWas = false;
+  private uiSyncedPhase: GamePhase | null = null;
+
+  /**
+   * Told by the React layer who is signed in, so the in-world menu can say so.
+   *
+   * Without this the VR menu reports "not signed in" to a player who signed in
+   * thirty seconds earlier on the flat page — the auth state lives in a React
+   * hook the game has no view of.
+   */
+  setIdentity(signedIn: boolean, name: string | null) {
+    if (this.uiState.signedIn === signedIn && this.uiState.signedInName === name) return;
+    this.uiState.signedIn = signedIn;
+    this.uiState.signedInName = name;
+    if (this.ui && this.vr?.active && this.uiScreen === 'menu') this.setVrUiScreen('menu');
+  }
 
   static vrSupported() { return VrRig.isSupported(); }
   get vrActive() { return !!this.vr?.active; }
@@ -1867,6 +1882,20 @@ export class Game {
       : this.phase === 'playing' ? (this.paused ? 'pause' : 'hud')
       : null;
 
+    /**
+     * A modal the player opened outranks a re-sync of the phase they were already
+     * in. `syncVrScreens` runs on every `setPhase` and from `enterVR`, and without
+     * this the scoreboard or the sign-in explainer would be replaced by the menu
+     * underneath the instant anything re-synced — a panel that closes itself while
+     * you are reading it, with no obvious cause. A genuine phase CHANGE still
+     * takes precedence, because being caught by the monster should not leave you
+     * staring at a leaderboard.
+     */
+    if (vrscreens.MODAL_SCREENS.has(this.uiScreen)
+        && this.phase === this.uiSyncedPhase
+        && this.ui.panels.length) return;
+    this.uiSyncedPhase = this.phase;
+
     if (screen === null) { this.ui.clear(); return; }
     if (screen === this.uiScreen && this.ui.panels.length) return;
     this.setVrUiScreen(screen);
@@ -1878,7 +1907,16 @@ export class Game {
       if (id === 'descend') { this.beginPlay(); this.syncVrScreens(); }
       if (id === 'resume') { this.setPaused(false); this.syncVrScreens(); }
       if (id === 'board') this.setVrUiScreen('board');
-      if (id === 'close') this.syncVrScreens();
+      if (id === 'signin') this.setVrUiScreen('signin');
+      /**
+       * The explainer's primary action actually ENDS the session rather than
+       * telling the player to find the system menu themselves. Being instructed
+       * to leave VR and then left to work out how is the kind of dead end that
+       * gets a headset taken off permanently. `cleanup()` runs on session end and
+       * puts the head, the eye height and the grade back.
+       */
+      if (id === 'leave-vr') void this.exitVR();
+      if (id === 'stay' || id === 'close') this.syncVrScreens();
     };
     this.ui.onSlide = (id, v) => {
       if (id === 'volume') { this.uiState.volume = v; this.setMasterVolume(v); }

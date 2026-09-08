@@ -214,17 +214,88 @@ export default function GameCanvas() {
      !!(document as Document & { webkitFullscreenEnabled?: boolean }).webkitFullscreenEnabled);
 
   /**
-   * Is there actually a headset? Asked once, asynchronously, and the button is
-   * withheld until the browser says yes — the same reasoning as `canFullscreen`
-   * above. Offering "Enter VR" on a machine with no runtime is offering something
-   * that can only produce an error dialog.
+   * VR availability, as a STATE rather than a boolean.
+   *
+   * The first version withheld the button entirely unless a headset answered,
+   * reasoning that offering something which cannot work is worse than offering
+   * nothing. That was wrong for one decisive reason: it made the whole feature
+   * invisible. A player on a desktop had no way to learn the game supports VR at
+   * all, and neither did the person who built it — the button never appeared on
+   * this machine once.
+   *
+   * three's own `VRButton` gets this right and is the convention worth copying:
+   * always render, and let the label carry the reason. An explained dead control
+   * teaches; an absent one hides a feature.
+   *
+   * `unavailable` and `unsupported` are deliberately distinct. "Your browser has
+   * no WebXR" and "your browser has WebXR but no headset answered" send a player
+   * to completely different fixes.
    */
-  const [vrSupported, setVrSupported] = useState(false);
+  type VrState = 'checking' | 'ready' | 'no-headset' | 'unsupported' | 'insecure';
+  const [vrState, setVrState] = useState<VrState>('checking');
   useEffect(() => {
     let alive = true;
-    void Game.vrSupported().then((ok) => { if (alive) setVrSupported(ok); });
+    // Secure context first: WebXR is gated on it, and a bare "no headset" on a
+    // plain-http origin sends people hunting for a hardware fault that is really
+    // a URL scheme. This is the common case when testing over a LAN address.
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      setVrState('insecure');
+      return;
+    }
+    if (typeof navigator === 'undefined' || !('xr' in navigator)) {
+      setVrState('unsupported');
+      return;
+    }
+    void Game.vrSupported()
+      .then((ok) => { if (alive) setVrState(ok ? 'ready' : 'no-headset'); })
+      .catch(() => { if (alive) setVrState('unsupported'); });
     return () => { alive = false; };
   }, []);
+
+  /**
+   * No "VR —" prefix on these: the badge beside the label already carries it,
+   * and the first pass rendered "VR — NO HEADSET FOUND" next to a VR badge.
+   * "Enter VR" keeps its wording because that is the conventional call to action
+   * and reads as a verb phrase rather than a repetition.
+   */
+  /**
+   * Short enough to stay on ONE line. Uppercased and letter-spaced by `.btn`,
+   * "No headset found" wrapped to two and made this button visibly taller than
+   * Scoreboard and Fullscreen above it — a ragged stack reads as unfinished. The
+   * detail lives in the note underneath, which has room for a full sentence.
+   */
+  const VR_LABEL: Record<VrState, string> = {
+    checking: 'Checking…',
+    ready: 'Enter VR',
+    'no-headset': 'No headset',
+    unsupported: 'Unsupported',
+    insecure: 'Needs https',
+  };
+  /**
+   * Why the control is dead, said once, under the button. Sign-in is called out
+   * on the ready path because it is a genuine ordering constraint rather than a
+   * fault: WebAuthn's prompt is a desktop OS modal with no representation inside
+   * a headset, so a player who wants a scored run has to sign in BEFORE putting
+   * it on. Discovering that with the headset already on is a bad five minutes.
+   */
+  const VR_NOTE: Record<VrState, string | null> = {
+    checking: null,
+    ready: 'Sign in first if you want the run counted — you cannot from inside.',
+    'no-headset': 'Connect a headset and reload. Tethered PC VR is the target.',
+    unsupported: 'Try Chrome, Edge, or another WebXR-capable browser.',
+    insecure: 'WebXR only runs on https or localhost.',
+  };
+
+  /**
+   * Keep the in-world menu's identity line in step with the flat page.
+   *
+   * The auth state lives in a React hook; the game has no view of it. Without
+   * this the VR menu tells a player who signed in thirty seconds ago that they
+   * are not signed in — and then, reasonably, they sign in again.
+   */
+  useEffect(() => {
+    gameRef.current?.setIdentity(auth.signedIn, auth.displayName || null);
+  }, [auth.signedIn, auth.displayName]);
 
   const enterVR = useCallback(async () => {
     const game = gameRef.current;
@@ -933,17 +1004,27 @@ export default function GameCanvas() {
                     {isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                   </button>
                 )}
-                {/* Only rendered once the browser has confirmed an immersive-vr
-                    session is actually available, so a machine with no headset
-                    never shows a button that can only fail. Entry is HERE, on the
-                    flat page, because passkey sign-in is a WebAuthn ceremony whose
-                    prompt is a desktop OS modal with no representation inside a
-                    headset — sign in, then put it on. */}
-                {vrSupported && (
-                  <button className="btn btn--ghost menu-board-btn" onClick={() => void enterVR()}>
-                    Enter VR
+                {/* ALWAYS rendered — the label carries the reason when it cannot
+                    be used. Withholding it hid the entire feature from anyone
+                    without a headset already plugged in, which included every
+                    desktop player and the person building it. Entry lives HERE,
+                    on the flat page, because passkey sign-in is a WebAuthn
+                    ceremony whose prompt is a desktop OS modal with no
+                    representation inside a headset — sign in, then put it on. */}
+                <div className="menu-vr">
+                  <button
+                    className={`btn btn--ghost menu-board-btn menu-vr-btn${vrState === 'ready' ? ' is-ready' : ''}`}
+                    onClick={() => void enterVR()}
+                    disabled={vrState !== 'ready'}
+                    aria-describedby="vr-note"
+                  >
+                    <span className="menu-vr-badge">VR</span>
+                    {VR_LABEL[vrState]}
                   </button>
-                )}
+                  {VR_NOTE[vrState] && (
+                    <p className="menu-vr-note" id="vr-note">{VR_NOTE[vrState]}</p>
+                  )}
+                </div>
               </div>
             </div>
           </div>

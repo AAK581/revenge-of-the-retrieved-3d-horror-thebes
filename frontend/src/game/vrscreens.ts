@@ -25,7 +25,10 @@ import { Panel } from './vrui';
 export const SCREEN_DISTANCE = 1.5;
 export const BOARD_DISTANCE = 1.9;
 
-export type ScreenName = 'menu' | 'pause' | 'board' | 'death' | 'loop' | 'hud';
+export type ScreenName = 'menu' | 'pause' | 'board' | 'death' | 'loop' | 'hud' | 'signin';
+
+/** Screens that sit OVER the menu and must not be replaced by a phase re-sync. */
+export const MODAL_SCREENS: ReadonlySet<ScreenName> = new Set(['board', 'signin']);
 
 export type ScoreRow = { rank: number; name: string; depth: number; gems: number; you?: boolean };
 
@@ -62,12 +65,21 @@ export function defaultState(): ScreenState {
 /**
  * The menu's identity footer.
  *
- * The flat menu offers a name field and a Sign in button. That cannot exist here:
- * WebAuthn is a browser-mediated ceremony and on tethered PC VR its prompt is a
- * desktop OS modal with no representation inside the headset. So the panel states
- * the situation instead of pretending to offer it — and it says so in the game's
- * voice rather than as an apology, because "not counted" is already a meaningful
- * thing in this fiction.
+ * The flat menu offers a name field and a Sign in button. The FIELD cannot exist
+ * here — WebAuthn is a browser-mediated ceremony and on tethered PC VR its prompt
+ * is a desktop OS modal with no representation inside the headset — but the first
+ * version drew the wrong conclusion from that and offered nothing at all except a
+ * line of text telling the player to have done it earlier. That is advice, not an
+ * affordance, and it is useless to the person reading it, who is already wearing
+ * the headset.
+ *
+ * So there IS a button. It cannot sign you in; it explains why and offers to drop
+ * you out so you can. See `signinItems`.
+ *
+ * Anonymous play is never gated behind it. Descend stays first and primary, the
+ * copy states a fact rather than nagging, and the alternative on the confirm
+ * screen is phrased as a real choice rather than a dismissal — a player who does
+ * not want an account should not be made to feel they are refusing something.
  */
 function identityFooter(s: ScreenState): PanelItem[] {
   if (s.signedIn && s.signedInName) {
@@ -78,7 +90,30 @@ function identityFooter(s: ScreenState): PanelItem[] {
   }
   return [
     { kind: 'rule' },
-    { kind: 'text', text: 'You are not signed in, so this run is not counted. Sign in on the desktop screen before you put the headset on.' },
+    { kind: 'text', text: 'Not signed in — this run will not be counted.' },
+    { kind: 'button', id: 'signin', label: 'Sign in' },
+  ];
+}
+
+/**
+ * What happens when a player presses Sign in from inside a headset.
+ *
+ * The honest answer is "you have to take it off", and saying so plainly beats
+ * either hiding the button or letting them press something that silently does
+ * nothing. The primary action actually performs the exit — being told to leave VR
+ * and then having to find the system menu yourself is the kind of dead end that
+ * makes people take the headset off for good.
+ */
+export function signinItems(): PanelItem[] {
+  return [
+    { kind: 'title', text: 'SIGNING IN HAPPENS OUTSIDE' },
+    {
+      kind: 'text',
+      text: 'Your passkey prompt is drawn by the browser itself, and it cannot be shown inside the headset. Leave VR, sign in on the flat screen, and come back — nothing is lost, you have not started a run yet.',
+    },
+    { kind: 'rule' },
+    { kind: 'button', id: 'leave-vr', label: 'Leave VR and sign in', primary: true },
+    { kind: 'button', id: 'stay', label: 'Stay — play unscored' },
   ];
 }
 
@@ -230,6 +265,11 @@ export function buildScreen(name: ScreenName, s: ScreenState): Panel {
     case 'death': {
       const p = new Panel(0.9, 0.4);
       p.setItems(deathItems());
+      return p;
+    }
+    case 'signin': {
+      const p = new Panel(0.9, 0.45);
+      p.setItems(signinItems());
       return p;
     }
     case 'loop': {
